@@ -1,7 +1,179 @@
 ﻿@page "/"
+@inject IDatabaseService Database
+@inject IYouTubeService YouTubeService
+@inject ILogger<Home> Logger
 
-<PageTitle>Home</PageTitle>
+<PageTitle>Dashboard - YMusicLite</PageTitle>
 
-<h1>Hello, world!</h1>
+<MudText Typo="Typo.h3" Class="mb-4">Dashboard</MudText>
 
-Welcome to your new app.
+<MudGrid>
+    <!-- Statistics Cards -->
+    <MudItem xs="12" sm="6" md="3">
+        <MudCard>
+            <MudCardContent>
+                <div class="d-flex justify-space-between">
+                    <div>
+                        <MudText Typo="Typo.h4">@_totalPlaylists</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Playlists</MudText>
+                    </div>
+                    <MudIcon Icon="@Icons.Material.Filled.PlaylistPlay" Color="Color.Primary" Size="Size.Large" />
+                </div>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <MudItem xs="12" sm="6" md="3">
+        <MudCard>
+            <MudCardContent>
+                <div class="d-flex justify-space-between">
+                    <div>
+                        <MudText Typo="Typo.h4">@_totalTracks</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Tracks</MudText>
+                    </div>
+                    <MudIcon Icon="@Icons.Material.Filled.MusicNote" Color="Color.Primary" Size="Size.Large" />
+                </div>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <MudItem xs="12" sm="6" md="3">
+        <MudCard>
+            <MudCardContent>
+                <div class="d-flex justify-space-between">
+                    <div>
+                        <MudText Typo="Typo.h4">@_downloadedTracks</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Downloaded</MudText>
+                    </div>
+                    <MudIcon Icon="@Icons.Material.Filled.Download" Color="Color.Success" Size="Size.Large" />
+                </div>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <MudItem xs="12" sm="6" md="3">
+        <MudCard>
+            <MudCardContent>
+                <div class="d-flex justify-space-between">
+                    <div>
+                        <MudText Typo="Typo.h4">@FormatBytes(_totalStorage)</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary">Storage Used</MudText>
+                    </div>
+                    <MudIcon Icon="@Icons.Material.Filled.Storage" Color="Color.Warning" Size="Size.Large" />
+                </div>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <!-- Recent Playlists -->
+    <MudItem xs="12">
+        <MudCard>
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Recent Playlists</MudText>
+                </CardHeaderContent>
+                <CardHeaderActions>
+                    <MudButton Variant="Variant.Text" Color="Color.Primary" Href="/playlists">View All</MudButton>
+                </CardHeaderActions>
+            </MudCardHeader>
+            <MudCardContent>
+                @if (_recentPlaylists.Any())
+                {
+                    <MudSimpleTable>
+                        @foreach (var playlist in _recentPlaylists.Take(5))
+                        {
+                            <tr>
+                                <td>
+                                    <div class="d-flex align-center">
+                                        <MudAvatar Color="Color.Primary" Class="mr-3">
+                                            <MudIcon Icon="@Icons.Material.Filled.PlaylistPlay" />
+                                        </MudAvatar>
+                                        <div class="flex-grow-1">
+                                            <MudText Typo="Typo.body1">@playlist.Name</MudText>
+                                            <MudText Typo="Typo.caption" Color="Color.Secondary">
+                                                @playlist.TotalTracks tracks • Last sync: @(playlist.LastSyncCompleted?.ToString("MMM dd, yyyy") ?? "Never")
+                                            </MudText>
+                                        </div>
+                                        <MudChip T="string" Text="@playlist.Status.ToString()" Color="@GetStatusColor(playlist.Status)" Size="Size.Small" Variant="Variant.Text" />
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </MudSimpleTable>
+                }
+                else
+                {
+                    <div class="pa-4 text-center">
+                        <MudIcon Icon="@Icons.Material.Filled.PlaylistPlay" Size="Size.Large" Color="Color.Secondary" />
+                        <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mt-2">
+                            No playlists yet. <MudLink Href="/playlists">Add your first playlist</MudLink>
+                        </MudText>
+                    </div>
+                }
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private int _totalPlaylists = 0;
+    private int _totalTracks = 0;
+    private int _downloadedTracks = 0;
+    private long _totalStorage = 0;
+    private List<Playlist> _recentPlaylists = new();
+    private List<SyncJob> _recentJobs = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDashboardData();
+    }
+
+    private async Task LoadDashboardData()
+    {
+        try
+        {
+            var playlists = await Database.Playlists.GetAllAsync();
+            _recentPlaylists = playlists.OrderByDescending(p => p.UpdatedAt).ToList();
+            _totalPlaylists = _recentPlaylists.Count;
+            
+            var tracks = await Database.Tracks.GetAllAsync();
+            _totalTracks = tracks.Count();
+            _downloadedTracks = tracks.Count(t => t.Status == TrackStatus.Completed);
+            _totalStorage = tracks.Where(t => t.Status == TrackStatus.Completed).Sum(t => t.FileSizeBytes);
+            
+            var jobs = await Database.SyncJobs.GetAllAsync();
+            _recentJobs = jobs.OrderByDescending(j => j.StartedAt).ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load dashboard data");
+        }
+    }
+
+    private Color GetStatusColor(PlaylistStatus status) => status switch
+    {
+        PlaylistStatus.Idle => Color.Default,
+        PlaylistStatus.Syncing => Color.Info,
+        PlaylistStatus.Downloading => Color.Warning,
+        PlaylistStatus.Completed => Color.Success,
+        PlaylistStatus.Error => Color.Error,
+        _ => Color.Default
+    };
+
+    private string FormatBytes(long bytes)
+    {
+        if (bytes == 0) return "0 B";
+        
+        string[] sizes = { "B", "KB", "MB", "GB", "TB" };
+        var order = 0;
+        var size = (double)bytes;
+        
+        while (size >= 1024 && order < sizes.Length - 1)
+        {
+            order++;
+            size /= 1024;
+        }
+        
+        return $"{size:0.##} {sizes[order]}";
+    }
+}

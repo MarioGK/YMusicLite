@@ -1,0 +1,108 @@
+@page "/settings"
+
+<PageTitle>Settings - YMusicLite</PageTitle>
+
+<MudText Typo="Typo.h3" Class="mb-4">Settings</MudText>
+
+<MudGrid>
+    <MudItem xs="12" md="6">
+        <MudCard>
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Download Settings</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudTextField Label="Download Path" 
+                              Value="@_downloadPath" 
+                              Disabled="true" 
+                              HelperText="Path where music files will be downloaded" 
+                              Class="mb-3" />
+                
+                <MudSlider @bind-Value="@_maxParallelDownloads" 
+                           Min="1" 
+                           Max="10" 
+                           Step="1"
+                           Color="Color.Primary"
+                           Class="mb-3">
+                    Max Parallel Downloads: @_maxParallelDownloads
+                </MudSlider>
+                
+                <MudCheckBox Label="Auto-sync enabled playlists" @bind-Value="@_autoSync" Color="Color.Primary" />
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <MudItem xs="12" md="6">
+        <MudCard>
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">Audio Settings</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudSelect Label="Audio Quality" @bind-Value="@_audioQuality" T="string">
+                    <MudSelectItem Value="@("High")">High Quality</MudSelectItem>
+                    <MudSelectItem Value="@("Medium")">Medium Quality</MudSelectItem>
+                    <MudSelectItem Value="@("Low")">Low Quality</MudSelectItem>
+                </MudSelect>
+                
+                <MudTextField Label="Min Duration (seconds)" 
+                              @bind-Value="@_minDuration" 
+                              InputType="InputType.Number"
+                              Class="mt-3"
+                              HelperText="Skip tracks shorter than this duration" />
+                              
+                <MudTextField Label="Max Duration (seconds)" 
+                              @bind-Value="@_maxDuration" 
+                              InputType="InputType.Number"
+                              Class="mt-3"
+                              HelperText="Skip tracks longer than this duration" />
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+
+    <MudItem xs="12">
+        <MudCard>
+            <MudCardHeader>
+                <CardHeaderContent>
+                    <MudText Typo="Typo.h6">About</MudText>
+                </CardHeaderContent>
+            </MudCardHeader>
+            <MudCardContent>
+                <MudText Typo="Typo.h5" Color="Color.Primary" Class="mb-2">YMusicLite</MudText>
+                <MudText Typo="Typo.body1" Class="mb-2">A modern YouTube playlist manager and downloader</MudText>
+                <MudText Typo="Typo.body2" Color="Color.Secondary">Built with Blazor Server and MudBlazor</MudText>
+                
+                <MudDivider Class="my-4" />
+                
+                <MudText Typo="Typo.h6" Class="mb-2">Technologies Used</MudText>
+                <div>
+                    <MudChip T="string" Text="Blazor Server" Color="Color.Primary" Size="Size.Small" Class="mr-1 mb-1" />
+                    <MudChip T="string" Text="MudBlazor" Color="Color.Secondary" Size="Size.Small" Class="mr-1 mb-1" />
+                    <MudChip T="string" Text="LiteDB" Color="Color.Tertiary" Size="Size.Small" Class="mr-1 mb-1" />
+                    <MudChip T="string" Text="YoutubeExplode" Color="Color.Success" Size="Size.Small" Class="mr-1 mb-1" />
+                    <MudChip T="string" Text="Serilog" Color="Color.Warning" Size="Size.Small" Class="mr-1 mb-1" />
+                    <MudChip T="string" Text="FFMpeg" Color="Color.Info" Size="Size.Small" Class="mr-1 mb-1" />
+                </div>
+            </MudCardContent>
+            <MudCardActions>
+                <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save">
+                    Save Settings
+                </MudButton>
+                <MudButton Variant="Variant.Text" Color="Color.Default">
+                    Reset to Defaults
+                </MudButton>
+            </MudCardActions>
+        </MudCard>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private int _maxParallelDownloads = 3;
+    private bool _autoSync = true;
+    private string _audioQuality = "High";
+    private int _minDuration = 30;
+    private int _maxDuration = 7200;
+    private string _downloadPath = "data/downloads";
+}

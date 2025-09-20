@@ -1,0 +1,253 @@
+@page "/playlists"
+@inject IDatabaseService Database
+@inject IYouTubeService YouTubeService
+@inject ISnackbar Snackbar
+@inject ILogger<Playlists> Logger
+
+<PageTitle>Playlists - YMusicLite</PageTitle>
+
+<div class="d-flex justify-space-between align-center mb-4">
+    <MudText Typo="Typo.h3">Playlists</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="@OpenCreateDialog">
+        Add Playlist
+    </MudButton>
+</div>
+
+@if (_playlists.Any())
+{
+    <MudGrid>
+        @foreach (var playlist in _playlists)
+        {
+            <MudItem xs="12" md="6" lg="4">
+                <MudCard Class="mb-4">
+                    <MudCardMedia Image="@(!string.IsNullOrEmpty(playlist.YouTubeUrl) ? $"https://img.youtube.com/vi/{GetVideoIdFromPlaylist(playlist.YouTubeUrl)}/hqdefault.jpg" : "")" Height="200" />
+                    <MudCardContent>
+                        <MudText Typo="Typo.h6">@playlist.Name</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">@playlist.Description</MudText>
+                        <div class="d-flex align-center mb-2">
+                            <MudIcon Icon="@Icons.Material.Filled.MusicNote" Color="Color.Secondary" Size="Size.Small" Class="mr-1" />
+                            <MudText Typo="Typo.caption">@playlist.TotalTracks tracks</MudText>
+                        </div>
+                        <div class="d-flex align-center mb-2">
+                            <MudIcon Icon="@Icons.Material.Filled.Schedule" Color="Color.Secondary" Size="Size.Small" Class="mr-1" />
+                            <MudText Typo="Typo.caption">Last sync: @(playlist.LastSyncCompleted?.ToString("MMM dd, yyyy") ?? "Never")</MudText>
+                        </div>
+                        <MudChip T="string" Text="@playlist.Status.ToString()" Color="@GetStatusColor(playlist.Status)" Size="Size.Small" Variant="Variant.Text" />
+                    </MudCardContent>
+                    <MudCardActions>
+                        <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Sync" OnClick="@(() => SyncPlaylist(playlist.Id))">
+                            Sync
+                        </MudButton>
+                        <MudButton Variant="Variant.Text" Color="Color.Default" StartIcon="@Icons.Material.Filled.Edit" OnClick="@(() => EditPlaylist(playlist))">
+                            Edit
+                        </MudButton>
+                        <MudButton Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" OnClick="@(() => DeletePlaylist(playlist))">
+                            Delete
+                        </MudButton>
+                    </MudCardActions>
+                </MudCard>
+            </MudItem>
+        }
+    </MudGrid>
+}
+else
+{
+    <MudPaper Class="pa-16 text-center">
+        <MudIcon Icon="@Icons.Material.Filled.PlaylistPlay" Size="Size.Large" Color="Color.Secondary" />
+        <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-4 mb-2">No playlists yet</MudText>
+        <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mb-4">Start by adding your first YouTube playlist</MudText>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="@OpenCreateDialog">
+            Add Your First Playlist
+        </MudButton>
+    </MudPaper>
+}
+
+<MudDialog @bind-Visible="@_showCreateDialog" Options="@_dialogOptions">
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@Icons.Material.Filled.PlaylistAdd" Class="mr-3" />
+            Add New Playlist
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <MudForm @ref="_form" @bind-IsValid="@_formValid">
+            <MudTextField @bind-Value="@_newPlaylist.Name" 
+                          Label="Playlist Name" 
+                          Required="true" 
+                          RequiredError="Name is required!" />
+            
+            <MudTextField @bind-Value="@_newPlaylist.YouTubeUrl" 
+                          Label="YouTube Playlist URL" 
+                          Required="true" 
+                          RequiredError="URL is required!"
+                          Class="mt-3"
+                          HelperText="Paste the full YouTube playlist URL" />
+            
+            <MudTextField @bind-Value="@_newPlaylist.Description" 
+                          Label="Description" 
+                          Lines="3"
+                          Class="mt-3" />
+            
+            <MudSwitch @bind-Value="@_newPlaylist.SyncMode" 
+                       Label="Sync Mode" 
+                       Color="Color.Primary" 
+                       Class="mt-3" />
+            
+            <MudSwitch @bind-Value="@_newPlaylist.AutoSync" 
+                       Label="Auto Sync" 
+                       Color="Color.Primary" 
+                       Class="mt-3" />
+        </MudForm>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@CloseCreateDialog">Cancel</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="@CreatePlaylist" Disabled="@(!_formValid)">
+            Create
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private List<Playlist> _playlists = new();
+    private bool _showCreateDialog = false;
+    private Playlist _newPlaylist = new();
+    private MudForm _form = new();
+    private bool _formValid = false;
+
+    private DialogOptions _dialogOptions = new() 
+    { 
+        MaxWidth = MaxWidth.Medium, 
+        FullWidth = true,
+        CloseButton = true
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPlaylists();
+    }
+
+    private async Task LoadPlaylists()
+    {
+        try
+        {
+            var playlists = await Database.Playlists.GetAllAsync();
+            _playlists = playlists.OrderByDescending(p => p.CreatedAt).ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load playlists");
+            Snackbar.Add("Failed to load playlists", Severity.Error);
+        }
+    }
+
+    private void OpenCreateDialog()
+    {
+        _newPlaylist = new Playlist();
+        _showCreateDialog = true;
+    }
+
+    private void CloseCreateDialog()
+    {
+        _showCreateDialog = false;
+        _newPlaylist = new();
+    }
+
+    private async Task CreatePlaylist()
+    {
+        try
+        {
+            // Get YouTube playlist info
+            var playlistInfo = await YouTubeService.GetPlaylistInfoAsync(_newPlaylist.YouTubeUrl);
+            if (playlistInfo == null)
+            {
+                Snackbar.Add("Invalid YouTube playlist URL", Severity.Error);
+                return;
+            }
+
+            // Update playlist with YouTube info if name is empty
+            if (string.IsNullOrEmpty(_newPlaylist.Name))
+            {
+                _newPlaylist.Name = playlistInfo.Title;
+            }
+            
+            if (string.IsNullOrEmpty(_newPlaylist.Description))
+            {
+                _newPlaylist.Description = playlistInfo.Description;
+            }
+
+            _newPlaylist.YouTubeId = playlistInfo.Id;
+            _newPlaylist.TotalTracks = playlistInfo.VideoCount;
+
+            await Database.Playlists.InsertAsync(_newPlaylist);
+            
+            Snackbar.Add($"Playlist '{_newPlaylist.Name}' added successfully", Severity.Success);
+            
+            await LoadPlaylists();
+            CloseCreateDialog();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to create playlist");
+            Snackbar.Add("Failed to create playlist", Severity.Error);
+        }
+    }
+
+    private void SyncPlaylist(ObjectId playlistId)
+    {
+        Snackbar.Add("Sync functionality will be implemented soon", Severity.Info);
+    }
+
+    private void EditPlaylist(Playlist playlist)
+    {
+        Snackbar.Add("Edit functionality will be implemented soon", Severity.Info);
+    }
+
+    private async Task DeletePlaylist(Playlist playlist)
+    {
+        try
+        {
+            await Database.Playlists.DeleteAsync(playlist.Id);
+            Snackbar.Add($"Playlist '{playlist.Name}' deleted", Severity.Success);
+            await LoadPlaylists();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to delete playlist");
+            Snackbar.Add("Failed to delete playlist", Severity.Error);
+        }
+    }
+
+    private Color GetStatusColor(PlaylistStatus status) => status switch
+    {
+        PlaylistStatus.Idle => Color.Default,
+        PlaylistStatus.Syncing => Color.Info,
+        PlaylistStatus.Downloading => Color.Warning,
+        PlaylistStatus.Completed => Color.Success,
+        PlaylistStatus.Error => Color.Error,
+        _ => Color.Default
+    };
+
+    private string GetVideoIdFromPlaylist(string playlistUrl)
+    {
+        // Simple extraction for demo purposes
+        try
+        {
+            var uri = new Uri(playlistUrl);
+            var queryParams = uri.Query.TrimStart('?').Split('&');
+            
+            foreach (var param in queryParams)
+            {
+                var parts = param.Split('=');
+                if (parts.Length == 2 && parts[0] == "list")
+                {
+                    return parts[1];
+                }
+            }
+            return "";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+}
