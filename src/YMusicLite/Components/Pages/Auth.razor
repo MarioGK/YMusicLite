@@ -1,0 +1,169 @@
+@page "/auth"
+@using YMusicLite.Services
+@inject IGoogleAuthService GoogleAuthService
+@inject IJSRuntime JSRuntime
+@inject NavigationManager Navigation
+
+<PageTitle>Authentication - YMusicLite</PageTitle>
+
+<MudContainer MaxWidth="MaxWidth.Small" Class="mt-16">
+    <MudPaper Class="pa-8">
+        <MudText Typo="Typo.h4" Align="Align.Center" GutterBottom="true">YouTube Authentication</MudText>
+        
+        <MudText Typo="Typo.body1" Class="mb-6">
+            To access your private playlists and enable automatic syncing, you need to authenticate with your Google/YouTube account.
+        </MudText>
+        
+        @if (IsLoading)
+        {
+            <div class="d-flex justify-center mb-4">
+                <MudProgressCircular Indeterminate="true" />
+            </div>
+            <MudText Typo="Typo.body2" Align="Align.Center">Processing authentication...</MudText>
+        }
+        else if (HasError)
+        {
+            <MudAlert Severity="Severity.Error" Class="mb-4">
+                @ErrorMessage
+            </MudAlert>
+        }
+        else if (IsAuthenticated)
+        {
+            <MudAlert Severity="Severity.Success" Class="mb-4">
+                Successfully authenticated as @UserDisplayName
+            </MudAlert>
+            <div class="d-flex justify-center">
+                <MudButton Variant="Variant.Filled" 
+                          Color="Color.Primary" 
+                          OnClick="NavigateToPlaylists">
+                    Go to Playlists
+                </MudButton>
+            </div>
+        }
+        else
+        {
+            <div class="d-flex justify-center mb-4">
+                <MudButton Variant="Variant.Filled" 
+                          Color="Color.Primary" 
+                          Size="Size.Large"
+                          StartIcon="@Icons.Custom.Brands.Google"
+                          OnClick="StartAuthentication">
+                    Sign in with Google
+                </MudButton>
+            </div>
+            
+            <MudText Typo="Typo.caption" Align="Align.Center">
+                We only request read-only access to your YouTube playlists
+            </MudText>
+        }
+    </MudPaper>
+</MudContainer>
+
+@code {
+    private bool IsLoading = false;
+    private bool HasError = false;
+    private bool IsAuthenticated = false;
+    private string ErrorMessage = string.Empty;
+    private string UserDisplayName = string.Empty;
+
+    [Parameter, SupplyParameterFromQuery]
+    public string? Code { get; set; }
+
+    [Parameter, SupplyParameterFromQuery] 
+    public string? State { get; set; }
+
+    [Parameter, SupplyParameterFromQuery]
+    public string? Error { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Check if this is a callback from Google OAuth
+        if (!string.IsNullOrEmpty(Code) && !string.IsNullOrEmpty(State))
+        {
+            await HandleOAuthCallback();
+        }
+        else if (!string.IsNullOrEmpty(Error))
+        {
+            HasError = true;
+            ErrorMessage = $"Authentication failed: {Error}";
+        }
+    }
+
+    private async Task StartAuthentication()
+    {
+        try
+        {
+            IsLoading = true;
+            StateHasChanged();
+
+            // Generate a random user ID for this session (in real app, you'd use actual user management)
+            var userId = Guid.NewGuid().ToString();
+            var redirectUri = $"{Navigation.BaseUri}auth";
+            
+            var authUrl = await GoogleAuthService.GetAuthorizationUrlAsync(userId, redirectUri);
+            
+            // Store userId in local storage or session for callback
+            await JSRuntime.InvokeVoidAsync("localStorage.setItem", "tempUserId", userId);
+            
+            // Redirect to Google OAuth
+            Navigation.NavigateTo(authUrl, forceLoad: true);
+        }
+        catch (Exception ex)
+        {
+            HasError = true;
+            ErrorMessage = $"Failed to start authentication: {ex.Message}";
+            IsLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task HandleOAuthCallback()
+    {
+        try
+        {
+            IsLoading = true;
+            StateHasChanged();
+
+            // Get the stored user ID
+            var userId = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "tempUserId");
+            if (string.IsNullOrEmpty(userId))
+            {
+                throw new InvalidOperationException("No user session found");
+            }
+
+            var redirectUri = $"{Navigation.BaseUri}auth";
+            var user = await GoogleAuthService.AuthorizeAsync(userId, Code!, redirectUri);
+            
+            if (user != null)
+            {
+                IsAuthenticated = true;
+                UserDisplayName = user.DisplayName;
+                
+                // Clear temporary storage
+                await JSRuntime.InvokeVoidAsync("localStorage.removeItem", "tempUserId");
+                
+                // Store authenticated user info for the session
+                await JSRuntime.InvokeVoidAsync("localStorage.setItem", "currentUserId", user.GoogleId);
+            }
+            else
+            {
+                throw new InvalidOperationException("Authentication failed - unable to get user information");
+            }
+        }
+        catch (Exception ex)
+        {
+            HasError = true;
+            ErrorMessage = $"Authentication failed: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void NavigateToPlaylists()
+    {
+        Navigation.NavigateTo("/playlists");
+    }
+}
