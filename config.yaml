@@ -1,0 +1,33 @@
+# Application configuration
+DataPath: "/app/data"
+DownloadPath: "/app/data/downloads"
+
+# Download settings
+MaxParallelDownloads: 3
+AudioQuality: "high"  # high, medium, low
+
+# Track filtering
+MinDurationSeconds: 30
+MaxDurationSeconds: 7200  # 2 hours
+
+# Sync settings
+AutoSyncIntervalMinutes: 60
+DefaultCronExpression: "0 3 * * 1"  # Monday at 3 AM
+
+# Logging
+Logging:
+  LogLevel:
+    Default: "Information"
+    Microsoft: "Warning"
+    YMusicLite: "Debug"
+
+# Serilog configuration
+Serilog:
+  MinimumLevel: "Information"
+  WriteTo:
+    - Name: "Console"
+    - Name: "File"
+      Args:
+        path: "/app/data/logs/ymusic-.txt"
+        rollingInterval: "Day"
+        retainedFileCountLimit: 7

@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  ymusic-lite:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ymusic-lite
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      # Volume for downloaded music and the LiteDB database file
+      - ./data:/app/data
+    environment:
+      # Configuration via environment variables
+      - ASPNETCORE_ENVIRONMENT=Production
+      - DataPath=/app/data
+      - MaxParallelDownloads=5
+      - DownloadPath=/app/data/downloads
+      - ASPNETCORE_URLS=http://+:80

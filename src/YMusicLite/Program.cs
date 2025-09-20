@@ -11,6 +11,9 @@ Log.Logger = new LoggerConfiguration()
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Add YAML configuration support
+builder.Configuration.AddYamlFile("config.yaml", optional: true, reloadOnChange: true);
+
 // Add Serilog
 builder.Host.UseSerilog();
 
