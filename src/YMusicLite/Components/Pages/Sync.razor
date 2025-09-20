@@ -1,0 +1,282 @@
+@page "/sync"
+@using YMusicLite.Services
+@using YMusicLite.Models
+@inject ISyncService SyncService
+@inject IDatabaseService DatabaseService
+@inject ISnackbar Snackbar
+
+<PageTitle>Sync Management - YMusicLite</PageTitle>
+
+<MudText Typo="Typo.h3" Class="mb-4">Sync Management</MudText>
+
+@if (Playlists == null)
+{
+    <MudProgressLinear Indeterminate="true" Class="mb-4" />
+    <MudText>Loading playlists...</MudText>
+}
+else if (Playlists.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">
+        No playlists found. Add some playlists first to start syncing.
+    </MudAlert>
+}
+else
+{
+    <MudGrid>
+        @foreach (var playlist in Playlists)
+        {
+            <MudItem xs="12" md="6" lg="4">
+                <MudCard>
+                    <MudCardContent>
+                        <MudText Typo="Typo.h6">@playlist.Name</MudText>
+                        <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">
+                            @playlist.TotalTracks tracks • @playlist.DownloadedTracks downloaded
+                        </MudText>
+                        
+                        <MudChip T="string" Size="Size.Small" 
+                                Color="GetStatusColor(playlist.Status)"
+                                Text="@playlist.Status.ToString()" />
+                        
+                        @if (playlist.AutoSync)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info" Text="Auto Sync" />
+                        }
+                        
+                        @if (!string.IsNullOrEmpty(playlist.LastSyncError))
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Error" Class="mt-2">
+                                Last error: @playlist.LastSyncError
+                            </MudText>
+                        }
+                        else if (playlist.LastSyncCompleted.HasValue)
+                        {
+                            <MudText Typo="Typo.caption" Color="Color.Success" Class="mt-2">
+                                Last sync: @playlist.LastSyncCompleted.Value.ToString("g")
+                            </MudText>
+                        }
+                    </MudCardContent>
+                    
+                    <MudCardActions>
+                        <MudButton Size="Size.Small" 
+                                  Color="Color.Primary" 
+                                  Variant="Variant.Text"
+                                  OnClick="() => SyncPlaylist(playlist.Id.ToString())"
+                                  Disabled="playlist.Status == PlaylistStatus.Syncing || playlist.Status == PlaylistStatus.Downloading">
+                            @if (playlist.Status == PlaylistStatus.Syncing || playlist.Status == PlaylistStatus.Downloading)
+                            {
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                @playlist.Status.ToString()
+                            }
+                            else
+                            {
+                                <MudIcon Icon="@Icons.Material.Filled.Sync" Size="Size.Small" Class="mr-1" />
+                                @("Sync Now")
+                            }
+                        </MudButton>
+                        
+                        @if (playlist.AutoSync)
+                        {
+                            <MudButton Size="Size.Small" 
+                                      Color="Color.Warning" 
+                                      Variant="Variant.Text"
+                                      OnClick="() => DisableAutoSync(playlist.Id.ToString())">
+                                Disable Auto
+                            </MudButton>
+                        }
+                        else
+                        {
+                            <MudButton Size="Size.Small" 
+                                      Color="Color.Success" 
+                                      Variant="Variant.Text"
+                                      OnClick="() => EnableAutoSync(playlist.Id.ToString())">
+                                Enable Auto
+                            </MudButton>
+                        }
+                    </MudCardActions>
+                </MudCard>
+            </MudItem>
+        }
+    </MudGrid>
+    
+    <MudDivider Class="my-8" />
+    
+    <MudText Typo="Typo.h5" Class="mb-4">Recent Sync Jobs</MudText>
+    
+    @if (RecentJobs == null)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else if (RecentJobs.Count == 0)
+    {
+        <MudText Color="Color.Secondary">No sync jobs yet.</MudText>
+    }
+    else
+    {
+        <MudTable Items="@RecentJobs" Dense="true" Hover="true">
+            <HeaderContent>
+                <MudTh>Playlist</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh>Started</MudTh>
+                <MudTh>Duration</MudTh>
+                <MudTh>Tracks</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    @{
+                        var playlist = Playlists.FirstOrDefault(p => p.Id.ToString() == context.PlaylistId);
+                    }
+                    @(playlist?.Name ?? "Unknown")
+                </MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Color="GetJobTypeColor(context.Type)" Text="@context.Type.ToString()" />
+                </MudTd>
+                <MudTd>
+                    <MudChip T="string" Size="Size.Small" Color="GetJobStatusColor(context.Status)" Text="@context.Status.ToString()" />
+                </MudTd>
+                <MudTd>@context.StartedAt.ToString("g")</MudTd>
+                <MudTd>@FormatDuration(context.Duration)</MudTd>
+                <MudTd>@context.SuccessfulTracks/@context.TotalTracks</MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+}
+
+@code {
+    private List<Playlist>? Playlists;
+    private List<SyncJob>? RecentJobs;
+    private Timer? RefreshTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadData();
+        
+        // Set up auto-refresh every 5 seconds
+        RefreshTimer = new Timer(async _ => 
+        {
+            await InvokeAsync(async () =>
+            {
+                await LoadData();
+                StateHasChanged();
+            });
+        }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    private async Task LoadData()
+    {
+        try
+        {
+            var playlists = await DatabaseService.Playlists.GetAllAsync();
+            Playlists = playlists.ToList();
+            
+            // Get recent sync jobs (last 20)
+            var allJobs = await DatabaseService.SyncJobs.GetAllAsync();
+            RecentJobs = allJobs.OrderByDescending(j => j.StartedAt).Take(20).ToList();
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Error loading data: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task SyncPlaylist(string playlistId)
+    {
+        try
+        {
+            await SyncService.SyncPlaylistAsync(playlistId, SyncJobType.Manual);
+            Snackbar.Add("Sync started successfully", Severity.Success);
+            await LoadData(); // Refresh data
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to start sync: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task EnableAutoSync(string playlistId)
+    {
+        try
+        {
+            var playlist = Playlists?.FirstOrDefault(p => p.Id.ToString() == playlistId);
+            if (playlist != null)
+            {
+                playlist.AutoSync = true;
+                playlist.CronExpressions = new List<string> { "0 3 * * *" }; // Daily at 3 AM
+                playlist.UpdatedAt = DateTime.UtcNow;
+                
+                await DatabaseService.Playlists.UpdateAsync(playlist);
+                Snackbar.Add("Auto sync enabled", Severity.Success);
+                await LoadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to enable auto sync: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private async Task DisableAutoSync(string playlistId)
+    {
+        try
+        {
+            var playlist = Playlists?.FirstOrDefault(p => p.Id.ToString() == playlistId);
+            if (playlist != null)
+            {
+                playlist.AutoSync = false;
+                playlist.CronExpressions.Clear();
+                playlist.UpdatedAt = DateTime.UtcNow;
+                
+                await DatabaseService.Playlists.UpdateAsync(playlist);
+                Snackbar.Add("Auto sync disabled", Severity.Success);
+                await LoadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Failed to disable auto sync: {ex.Message}", Severity.Error);
+        }
+    }
+
+    private Color GetStatusColor(PlaylistStatus status) => status switch
+    {
+        PlaylistStatus.Idle => Color.Default,
+        PlaylistStatus.Syncing => Color.Info,
+        PlaylistStatus.Downloading => Color.Warning,
+        PlaylistStatus.Error => Color.Error,
+        PlaylistStatus.Completed => Color.Success,
+        _ => Color.Default
+    };
+
+    private Color GetJobTypeColor(SyncJobType type) => type switch
+    {
+        SyncJobType.Manual => Color.Primary,
+        SyncJobType.Scheduled => Color.Info,
+        SyncJobType.AutoSync => Color.Success,
+        _ => Color.Default
+    };
+
+    private Color GetJobStatusColor(SyncJobStatus status) => status switch
+    {
+        SyncJobStatus.Pending => Color.Default,
+        SyncJobStatus.Running => Color.Info,
+        SyncJobStatus.Completed => Color.Success,
+        SyncJobStatus.Failed => Color.Error,
+        SyncJobStatus.Cancelled => Color.Warning,
+        _ => Color.Default
+    };
+
+    private string FormatDuration(TimeSpan? duration)
+    {
+        if (!duration.HasValue) return "-";
+        
+        if (duration.Value.TotalHours >= 1)
+            return duration.Value.ToString(@"h\:mm\:ss");
+        else
+            return duration.Value.ToString(@"mm\:ss");
+    }
+
+    public void Dispose()
+    {
+        RefreshTimer?.Dispose();
+    }
+}

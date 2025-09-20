@@ -31,6 +31,8 @@
     
     <!-- HTTP Client for OAuth -->
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="10.0.0-rc.1.25451.107" />
+    <PackageReference Include="Google.Apis.YouTube.v3" Version="1.68.0.3503" />
+    <PackageReference Include="Google.Apis.Auth" Version="1.68.0" />
   </ItemGroup>
 
 </Project>

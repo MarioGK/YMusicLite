@@ -27,6 +27,12 @@ builder.Services.AddMudServices();
 // Add application services
 builder.Services.AddSingleton<IDatabaseService, DatabaseService>();
 builder.Services.AddScoped<IYouTubeService, YouTubeService>();
+builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
+builder.Services.AddScoped<IDownloadService, DownloadService>();
+builder.Services.AddScoped<ISyncService, SyncService>();
+builder.Services.AddSingleton<SchedulingService>();
+builder.Services.AddSingleton<ISchedulingService>(provider => provider.GetRequiredService<SchedulingService>());
+builder.Services.AddHostedService<SchedulingService>();
 
 // Add HTTP client for potential OAuth usage
 builder.Services.AddHttpClient();
