@@ -18,13 +18,13 @@ Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
     .Enrich.FromLogContext()
     .Enrich.WithProperty("Application", "YMusicLite")
-    .WriteTo.Console(theme: AnsiConsoleTheme.Sixteen, outputTemplate: "[${Timestamp:HH:mm:ss.fff} ${Level:u3}] ${SourceContext} ${Message:lj}${NewLine}${Exception}")
+    .WriteTo.Console(theme: AnsiConsoleTheme.Sixteen, outputTemplate: "[{Timestamp:HH:mm:ss.fff} {Level:u3}] {SourceContext} {Message:lj}{NewLine}{Exception}")
     .WriteTo.File(Path.Combine(logDirectory, "ymusic-.log"),
         rollingInterval: RollingInterval.Day,
         retainedFileCountLimit: 10,
         shared: true,
-        buffered: true,
-        outputTemplate: "${Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [${Level:u3}] ${SourceContext} ${Message:lj}${NewLine}${Exception}")
+        buffered: false,
+        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {SourceContext} {Message:lj}{NewLine}{Exception}")
     .CreateLogger();
 
 var builder = WebApplication.CreateBuilder(args);
@@ -70,7 +70,6 @@ if (!app.Environment.IsDevelopment())
 }
 
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
-app.UseHttpsRedirection();
 
 app.UseAntiforgery();
 

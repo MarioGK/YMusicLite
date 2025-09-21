@@ -32,6 +32,20 @@
             <MudAlert Severity="Severity.Success" Class="mb-4">
                 Successfully authenticated as @UserDisplayName
             </MudAlert>
+            @if (PrivatePlaylists.Any())
+            {
+                <MudText Typo="Typo.h6" Class="mb-2">Your Private Playlists (first @PrivatePlaylists.Count)</MudText>
+                <MudList T="string" Dense="true" Class="mb-4">
+                    @foreach (var p in PrivatePlaylists)
+                    {
+                        <MudListItem T="string">@p.Snippet.Title (@p.ContentDetails?.ItemCount ?? 0)</MudListItem>
+                    }
+                </MudList>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Class="mb-4">No playlists retrieved yet.</MudText>
+            }
             <div class="d-flex justify-center">
                 <MudButton Variant="Variant.Filled" 
                           Color="Color.Primary" 
@@ -65,6 +79,7 @@
     private bool IsAuthenticated = false;
     private string ErrorMessage = string.Empty;
     private string UserDisplayName = string.Empty;
+    private List<Google.Apis.YouTube.v3.Data.Playlist> PrivatePlaylists = new();
 
     [Parameter, SupplyParameterFromQuery]
     public string? Code { get; set; }
@@ -138,6 +153,9 @@
             {
                 IsAuthenticated = true;
                 UserDisplayName = user.DisplayName;
+                // Fetch initial set of private playlists
+                var lists = await GoogleAuthService.GetPrivatePlaylistsAsync(user.GoogleId, 25);
+                PrivatePlaylists = lists.ToList();
                 
                 // Clear temporary storage
                 await JSRuntime.InvokeVoidAsync("localStorage.removeItem", "tempUserId");

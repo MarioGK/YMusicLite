@@ -3,6 +3,17 @@
 A modern YouTube playlist manager and downloader built with Blazor Server and MudBlazor.
 
 ## Features
+ * Lightweight and fast
+
+## Google / YouTube Authentication
+
+YMusicLite now uses a desktop-style OAuth flow with only a public Google OAuth Client ID:
+
+Client ID: `198027251119-c04chsbao214hcplsf697u2smo682vuq.apps.googleusercontent.com`
+
+We request only the `youtube.readonly` scope to read your private playlists. Tokens (access & refresh) are securely stored in the local LiteDB database along with granted scopes. A minimal PKCE structure is in place; due to current library limitations the code verifier is reserved for future enhancement.
+
+After authenticating via `/auth`, your private playlists are fetched and displayed. You can revoke access, and the application will handle token refresh automatically when near expiry.
 
 - 🎵 **Modern UI**: Built with MudBlazor featuring a dark theme with configurable colors
 - 📊 **Dashboard**: Statistics and activity overview

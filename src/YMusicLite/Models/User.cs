@@ -13,6 +13,7 @@ public class User
     public string AccessToken { get; set; } = string.Empty;
     public string RefreshToken { get; set; } = string.Empty;
     public DateTime TokenExpiry { get; set; }
+    public string Scopes { get; set; } = string.Empty; // space separated scopes granted
     
     // User preferences
     public bool DarkTheme { get; set; } = true;
