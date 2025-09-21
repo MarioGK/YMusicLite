@@ -18,16 +18,19 @@ public class DownloadService : IDownloadService
     private readonly IDatabaseService _database;
     private readonly ILogger<DownloadService> _logger;
     private readonly IConfiguration _configuration;
+    private readonly IMetricsService _metrics;
 
     public DownloadService(
         IDatabaseService database, 
         ILogger<DownloadService> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IMetricsService metrics)
     {
         _youtube = new YoutubeClient();
         _database = database;
         _logger = logger;
         _configuration = configuration;
+        _metrics = metrics;
     }
 
     public async Task<bool> DownloadTrackAsync(Track track, string outputDirectory, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
@@ -39,6 +42,9 @@ public class DownloadService : IDownloadService
             track.Status = TrackStatus.Downloading;
             track.UpdatedAt = DateTime.UtcNow;
             await _database.Tracks.UpdateAsync(track);
+
+            // Start metrics tracking (expected bytes unknown until stream retrieval)
+            _metrics.TrackDownloadStart(track.Id.ToString());
 
             // Ensure output directory exists
             Directory.CreateDirectory(outputDirectory);
@@ -87,10 +93,23 @@ public class DownloadService : IDownloadService
             await _database.Tracks.UpdateAsync(track);
 
             // Download and convert to MP3 directly
+            var lastBytes = 0L; // YoutubeExplode does not expose bytes directly via this progress so we approximate
             var progressReporter = new Progress<double>(p =>
             {
                 track.DownloadProgress = (int)(p * 100);
                 progress?.Report(p);
+                // We can't get bytes delta easily; use percentage with expected length if available
+                if (audioStream?.Size != null)
+                {
+                    var expected = audioStream.Size.Bytes;
+                    var currentBytes = (long)(expected * p);
+                    var delta = currentBytes - lastBytes;
+                    if (delta > 0)
+                    {
+                        _metrics.TrackDownloadProgress(track.Id.ToString(), delta);
+                        lastBytes = currentBytes;
+                    }
+                }
             });
 
             await _youtube.Videos.DownloadAsync(track.YouTubeId, outputPath, o => o
@@ -108,6 +127,8 @@ public class DownloadService : IDownloadService
             track.ErrorMessage = null;
 
             await _database.Tracks.UpdateAsync(track);
+
+            _metrics.TrackDownloadCompleted(track.Id.ToString(), fileInfo.Length);
 
             _logger.LogInformation("Successfully downloaded track: {Title} ({SizeMB:F1} MB)", 
                 track.Title, fileInfo.Length / 1024.0 / 1024.0);
@@ -129,6 +150,7 @@ public class DownloadService : IDownloadService
             track.ErrorMessage = ex.Message;
             track.UpdatedAt = DateTime.UtcNow;
             await _database.Tracks.UpdateAsync(track);
+            _metrics.TrackDownloadFailed(track.Id.ToString());
             return false;
         }
     }

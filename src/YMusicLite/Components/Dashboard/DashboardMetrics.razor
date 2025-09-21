@@ -1,0 +1,93 @@
+@using YMusicLite.Services
+@using MudBlazor
+@inject IMetricsService Metrics
+
+<MudGrid Class="mb-6">
+    <MudItem xs="12" sm="6" md="3">
+        <MudCard Class="pa-2">
+            <MudCardContent>
+                <MudText Typo="Typo.subtitle2" Color="Color.Secondary">Active Downloads</MudText>
+                <MudText Typo="Typo.h5">@_snapshot.ActiveDownloads</MudText>
+                <MudProgressLinear Value="@_snapshot.AverageTrackProgressPercent" Color="Color.Primary" Class="mt-2" />
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Avg Progress: @_snapshot.AverageTrackProgressPercent:F0%</MudText>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <MudCard Class="pa-2">
+            <MudCardContent>
+                <MudText Typo="Typo.subtitle2" Color="Color.Secondary">Download Speed</MudText>
+                <MudText Typo="Typo.h5">@FormatSpeed(_snapshot.AggregateDownloadSpeedBytesPerSec)</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Last hour: @_snapshot.CompletedDownloadsLastHour success / @_snapshot.FailedDownloadsLastHour failed</MudText>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <MudCard Class="pa-2">
+            <MudCardContent>
+                <MudText Typo="Typo.subtitle2" Color="Color.Secondary">Sync Status</MudText>
+                @if (_snapshot.ActiveSyncPlaylistId != null)
+                {
+                    <MudText Typo="Typo.h6">@_snapshot.ActiveSyncStatus</MudText>
+                    <MudProgressLinear Value="@_snapshot.ActiveSyncPercent" Color="Color.Info" Class="mt-2" />
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">@_snapshot.ActiveSyncProcessed / @_snapshot.ActiveSyncTotal</MudText>
+                }
+                else
+                {
+                    <MudText Typo="Typo.h5">Idle</MudText>
+                    <MudText Typo="Typo.caption" Color="Color.Secondary">Last completed: @(_snapshot.LastSyncCompleted?.ToLocalTime().ToString("g") ?? "-")</MudText>
+                }
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <MudCard Class="pa-2">
+            <MudCardContent>
+                <MudText Typo="Typo.subtitle2" Color="Color.Secondary">System</MudText>
+                <MudText Typo="Typo.h6">@_uptime</MudText>
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Updated @DateTime.Now.ToLongTimeString()</MudText>
+            </MudCardContent>
+        </MudCard>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private MetricsSnapshot _snapshot = new(0,0,0,0,0,null,null,null,null,0,0,0,DateTime.UtcNow);
+    private System.Timers.Timer? _timer;
+    private string _uptime = string.Empty;
+    private readonly DateTime _startUtc = DateTime.UtcNow;
+
+    protected override void OnInitialized()
+    {
+        Refresh();
+        _timer = new System.Timers.Timer(1500);
+        _timer.Elapsed += (_, _) => InvokeAsync(() => { Refresh(); StateHasChanged(); });
+        _timer.Start();
+    }
+
+    private void Refresh()
+    {
+        _snapshot = Metrics.GetSnapshot();
+        var up = DateTime.UtcNow - _startUtc;
+    if (up.TotalHours >= 1) _uptime = up.ToString(@"h\:mm\:ss");
+    else _uptime = up.ToString(@"mm\:ss");
+    }
+
+    private string FormatSpeed(double bytesPerSec)
+    {
+        if (bytesPerSec <= 0.1) return "0 B/s";
+        string[] units = {"B/s","KB/s","MB/s","GB/s"};
+        var idx = 0;
+        double val = bytesPerSec;
+        while (val >= 1024 && idx < units.Length-1)
+        {
+            val /= 1024; idx++;
+        }
+        return $"{val:0.##} {units[idx]}";
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+}

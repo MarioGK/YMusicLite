@@ -1,0 +1,11 @@
+/* Modern refinements */
+.mud-card { transition: box-shadow .2s ease, transform .15s ease; }
+.mud-card:hover { box-shadow: 0 6px 18px rgba(0,0,0,.35); transform: translateY(-2px); }
+
+.metrics-spark { height:4px; width:100%; background:linear-gradient(90deg,#d32f2f,#ff9800,#4fc3f7); border-radius:2px; }
+
+.mud-appbar .mud-chip { font-weight:500; }
+
+@media (max-width: 900px){
+  .mud-appbar .mud-chip { display:none; }
+}

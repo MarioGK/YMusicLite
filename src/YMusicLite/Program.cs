@@ -33,6 +33,7 @@ builder.Services.AddScoped<ISyncService, SyncService>();
 builder.Services.AddSingleton<SchedulingService>();
 builder.Services.AddSingleton<ISchedulingService>(provider => provider.GetRequiredService<SchedulingService>());
 builder.Services.AddHostedService<SchedulingService>();
+builder.Services.AddSingleton<IMetricsService, MetricsService>();
 
 // Add HTTP client for potential OAuth usage
 builder.Services.AddHttpClient();

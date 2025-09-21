@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
 
 <MudThemeProvider Theme="@_currentTheme" IsDarkMode="@_isDarkMode" />
+<link href="css/custom.css" rel="stylesheet" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
@@ -8,8 +9,23 @@
 <MudBlazor.MudLayout>
     <MudAppBar Elevation="1">
         <MudIconButton Icon="@Icons.Material.Filled.Menu" Color="Color.Inherit" Edge="Edge.Start" OnClick="@((e) => DrawerToggle())" />
-        <MudText Typo="Typo.h5" Class="ml-3">YMusicLite</MudText>
+        <MudText Typo="Typo.h6" Class="ml-2">YMusicLite</MudText>
         <MudSpacer />
+        <MudTooltip Text="Aggregate download speed">
+            <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined" Class="mr-2" StartIcon="@Icons.Material.Filled.Speed">
+                @FormatSpeed(_snapshot.AggregateDownloadSpeedBytesPerSec)
+            </MudChip>
+        </MudTooltip>
+        <MudTooltip Text="Active downloads">
+            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined" Class="mr-2" StartIcon="@Icons.Material.Filled.Download">
+                @_snapshot.ActiveDownloads.ToString()
+            </MudChip>
+        </MudTooltip>
+        <MudTooltip Text="Sync status">
+            <MudChip T="string" Color="@(_snapshot.ActiveSyncPlaylistId != null ? Color.Info : Color.Default)" Variant="Variant.Outlined" Class="mr-2" StartIcon="@Icons.Material.Filled.Sync">
+                @((_snapshot.ActiveSyncPlaylistId != null) ? $"{_snapshot.ActiveSyncPercent:F0}%" : "Idle")
+            </MudChip>
+        </MudTooltip>
         <MudIconButton Icon="@(_isDarkMode ? Icons.Material.Filled.LightMode : Icons.Material.Filled.DarkMode)" 
                        Color="Color.Inherit" 
                        OnClick="@ToggleTheme" />
@@ -30,6 +46,9 @@
     private bool _drawerOpen = true;
     private bool _isDarkMode = true;
     private MudTheme _currentTheme = new();
+    [Inject] private IMetricsService Metrics { get; set; } = default!;
+    private MetricsSnapshot _snapshot = new(0,0,0,0,0,null,null,null,null,0,0,0,DateTime.UtcNow);
+    private System.Timers.Timer? _metricsTimer;
 
     protected override void OnInitialized()
     {
@@ -40,6 +59,11 @@
                 Primary = "#D32F2F",
                 Secondary = "#FF9800",
                 AppbarBackground = "#D32F2F",
+                Tertiary = "#4FC3F7",
+                Info = "#42A5F5",
+                Success = "#66BB6A",
+                Warning = "#FFA726",
+                Error = "#EF5350"
             },
             PaletteDark = new PaletteDark()
             {
@@ -49,8 +73,17 @@
                 Dark = "#1a1a1a",
                 Surface = "#1e1e1e",
                 Background = "#121212",
+                Tertiary = "#29B6F6",
+                Info = "#2196F3",
+                Success = "#43A047",
+                Warning = "#FB8C00",
+                Error = "#E53935"
             }
         };
+        RefreshMetrics();
+        _metricsTimer = new System.Timers.Timer(2000);
+        _metricsTimer.Elapsed += (_, _) => InvokeAsync(() => { RefreshMetrics(); StateHasChanged(); });
+        _metricsTimer.Start();
     }
 
     private void DrawerToggle()
@@ -61,5 +94,24 @@
     private void ToggleTheme()
     {
         _isDarkMode = !_isDarkMode;
+    }
+
+    private void RefreshMetrics()
+    {
+        _snapshot = Metrics.GetSnapshot();
+    }
+
+    private string FormatSpeed(double bytesPerSec)
+    {
+        if (bytesPerSec <= 0.1) return "0 B/s";
+        string[] units = {"B/s","KB/s","MB/s","GB/s"};
+        var idx = 0; double val = bytesPerSec;
+        while (val >= 1024 && idx < units.Length-1) { val /= 1024; idx++; }
+        return $"{val:0.##} {units[idx]}";
+    }
+
+    public void Dispose()
+    {
+        _metricsTimer?.Dispose();
     }
 }

@@ -19,19 +19,22 @@ public class SyncService : ISyncService
     private readonly IConfiguration _configuration;
     private readonly Dictionary<string, CancellationTokenSource> _activeSyncs = new();
     private readonly object _lock = new object();
+    private readonly IMetricsService _metrics;
 
     public SyncService(
         IDatabaseService database,
         IYouTubeService youtubeService,
         IDownloadService downloadService,
         ILogger<SyncService> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IMetricsService metrics)
     {
         _database = database;
         _youtubeService = youtubeService;
         _downloadService = downloadService;
         _logger = logger;
         _configuration = configuration;
+        _metrics = metrics;
     }
 
     public async Task<SyncJob> SyncPlaylistAsync(string playlistId, SyncJobType jobType = SyncJobType.Manual, CancellationToken cancellationToken = default)
@@ -83,6 +86,7 @@ public class SyncService : ISyncService
         {
             try
             {
+                _metrics.UpdateActiveSync(playlist.Id.ToString(), SyncJobStatus.Running, 0, 0, syncJob.StartedAt);
                 await PerformSyncAsync(playlist, syncJob, syncCts.Token);
             }
             catch (Exception ex)
@@ -92,6 +96,10 @@ public class SyncService : ISyncService
             }
             finally
             {
+                if (syncJob.Status is SyncJobStatus.Completed or SyncJobStatus.Failed or SyncJobStatus.Cancelled)
+                {
+                    _metrics.CompleteSync(playlist.Id.ToString(), syncJob.Status, DateTime.UtcNow);
+                }
                 // Cleanup
                 lock (_lock)
                 {
@@ -292,6 +300,7 @@ public class SyncService : ISyncService
                     {
                         syncJob.SuccessfulTracks = p.completed - syncJob.FailedTracks;
                     }
+                    _metrics.UpdateActiveSync(playlist.Id.ToString(), SyncJobStatus.Running, syncJob.ProcessedTracks, syncJob.TotalTracks, syncJob.StartedAt);
                 });
 
                 var downloadedTracks = await _downloadService.DownloadPlaylistTracksAsync(

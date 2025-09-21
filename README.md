@@ -6,6 +6,7 @@ A modern YouTube playlist manager and downloader built with Blazor Server and Mu
 
 - 🎵 **Modern UI**: Built with MudBlazor featuring a dark theme with configurable colors
 - 📊 **Dashboard**: Statistics and activity overview
+- ⚡ **Real-Time Metrics**: Live download speed, active download count, average progress, and sync status
 - 📝 **Playlist Management**: Create, edit, and manage YouTube playlists
 - 🎧 **Audio Download**: Convert YouTube videos to MP3 format
 - 🔄 **Sync Management**: Automatic and scheduled playlist synchronization
@@ -124,7 +125,7 @@ docker-compose up -d
 
 ## Usage
 
-1. **Dashboard**: View statistics and recent activity
+1. **Dashboard**: View statistics and real-time metrics (speed, active downloads, sync progress)
 2. **Add Playlists**: Navigate to Playlists and add YouTube playlist URLs
 3. **Configure Settings**: Adjust download preferences and quality settings
 4. **Monitor Downloads**: Track download progress and sync history
@@ -141,6 +142,8 @@ docker-compose up -d
 - **DatabaseService**: LiteDB data access layer
 - **YouTubeService**: YouTube API integration
 - **DownloadService**: Audio download and conversion
+- **SyncService**: Orchestrates playlist synchronization jobs
+- **MetricsService**: Aggregates runtime metrics for UI components
 
 ## Contributing
 
