@@ -1,6 +1,7 @@
 @inherits LayoutComponentBase
+@implements IDisposable
 
-<MudThemeProvider Theme="@_currentTheme" IsDarkMode="@_isDarkMode" />
+<MudThemeProvider @key="_isDarkMode" Theme="@_currentTheme" IsDarkMode="@_isDarkMode" />
 <link href="css/custom.css" rel="stylesheet" />
 <MudPopoverProvider />
 <MudDialogProvider />
@@ -52,9 +53,9 @@
 
     protected override void OnInitialized()
     {
-        _currentTheme = new MudTheme()
+        _currentTheme = new MudTheme
         {
-            PaletteLight = new PaletteLight()
+            PaletteLight = new PaletteLight
             {
                 Primary = "#D32F2F",
                 Secondary = "#FF9800",
@@ -62,38 +63,47 @@
                 Tertiary = "#4FC3F7",
                 Info = "#42A5F5",
                 Success = "#66BB6A",
-                Warning = "#FFA726",
-                Error = "#EF5350"
-            },
-            PaletteDark = new PaletteDark()
-            {
-                Primary = "#D32F2F",
-                Secondary = "#FF9800",
-                AppbarBackground = "#D32F2F",
-                Dark = "#1a1a1a",
-                Surface = "#1e1e1e",
-                Background = "#121212",
-                Tertiary = "#29B6F6",
-                Info = "#2196F3",
-                Success = "#43A047",
                 Warning = "#FB8C00",
                 Error = "#E53935"
+            },
+            PaletteDark = new PaletteDark
+            {
+                Primary = "#EF4444",
+                Secondary = "#FF9800",
+                AppbarBackground = "#121212",
+                DrawerBackground = "#0D0D0F",
+                Background = "#08090A",
+                Surface = "#111315",
+                Dark = "#060607",
+                Tertiary = "#1E88E5",
+                Info = "#2196F3",
+                Success = "#34D399",
+                Warning = "#F59E0B",
+                Error = "#F87171",
+                TextPrimary = "#F5F7FA",
+                TextSecondary = "#A0A4AB",
+                ActionDefault = "#E5E7EB",
+                ActionDisabled = "#4B5563",
+                ActionDisabledBackground = "#1F2937",
+                Divider = "#1F2428",
+                OverlayDark = "#000000E6"
             }
         };
+
         RefreshMetrics();
         _metricsTimer = new System.Timers.Timer(2000);
         _metricsTimer.Elapsed += (_, _) => InvokeAsync(() => { RefreshMetrics(); StateHasChanged(); });
         _metricsTimer.Start();
     }
 
-    private void DrawerToggle()
-    {
-        _drawerOpen = !_drawerOpen;
-    }
-
     private void ToggleTheme()
     {
         _isDarkMode = !_isDarkMode;
+    }
+
+    private void DrawerToggle()
+    {
+        _drawerOpen = !_drawerOpen;
     }
 
     private void RefreshMetrics()

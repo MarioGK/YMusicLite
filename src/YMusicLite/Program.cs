@@ -2,19 +2,40 @@ using YMusicLite.Components;
 using YMusicLite.Services;
 using MudBlazor.Services;
 using Serilog;
+using Serilog.Events;
+using Serilog.Sinks.SystemConsole.Themes;
+using System;
+using System.IO;
 
-// Configure Serilog
+// Configure Serilog as the ONLY logging provider
+// Place log files under the application base directory (bin output) to avoid triggering dotnet watch browser refresh loops.
+var logDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
+Directory.CreateDirectory(logDirectory);
+
 Log.Logger = new LoggerConfiguration()
-    .WriteTo.Console()
-    .WriteTo.File("logs/ymusic-.txt", rollingInterval: RollingInterval.Day)
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
+    .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
+    .Enrich.FromLogContext()
+    .Enrich.WithProperty("Application", "YMusicLite")
+    .WriteTo.Console(theme: AnsiConsoleTheme.Sixteen, outputTemplate: "[${Timestamp:HH:mm:ss.fff} ${Level:u3}] ${SourceContext} ${Message:lj}${NewLine}${Exception}")
+    .WriteTo.File(Path.Combine(logDirectory, "ymusic-.log"),
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 10,
+        shared: true,
+        buffered: true,
+        outputTemplate: "${Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [${Level:u3}] ${SourceContext} ${Message:lj}${NewLine}${Exception}")
     .CreateLogger();
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Remove all default logging providers so Serilog is the single provider
+builder.Logging.ClearProviders();
+
 // Add YAML configuration support
 builder.Configuration.AddYamlFile("config.yaml", optional: true, reloadOnChange: true);
 
-// Add Serilog
+// Plug Serilog into the host
 builder.Host.UseSerilog();
 
 // Add services to the container.
