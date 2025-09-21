@@ -9,6 +9,7 @@ public interface IDatabaseService
     IRepository<Playlist> Playlists { get; }
     IRepository<Track> Tracks { get; }
     IRepository<SyncJob> SyncJobs { get; }
+    IRepository<PkceSession> PkceSessions { get; }
     void Initialize();
 }
 
@@ -35,10 +36,11 @@ public class DatabaseService : IDatabaseService, IDisposable
         
         _database = new LiteDatabase($"Filename={dbPath};Connection=shared");
         
-        Users = new LiteDbRepository<User>(_database);
+    Users = new LiteDbRepository<User>(_database);
         Playlists = new LiteDbRepository<Playlist>(_database);
         Tracks = new LiteDbRepository<Track>(_database);
         SyncJobs = new LiteDbRepository<SyncJob>(_database);
+    PkceSessions = new LiteDbRepository<PkceSession>(_database);
         
         Initialize();
     }
@@ -47,6 +49,7 @@ public class DatabaseService : IDatabaseService, IDisposable
     public IRepository<Playlist> Playlists { get; }
     public IRepository<Track> Tracks { get; }
     public IRepository<SyncJob> SyncJobs { get; }
+    public IRepository<PkceSession> PkceSessions { get; }
 
     public void Initialize()
     {
@@ -68,6 +71,10 @@ public class DatabaseService : IDatabaseService, IDisposable
             var syncJobs = _database.GetCollection<SyncJob>();
             syncJobs.EnsureIndex(x => x.PlaylistId);
             syncJobs.EnsureIndex(x => x.UserId);
+
+            var pkce = _database.GetCollection<PkceSession>();
+            pkce.EnsureIndex(x => x.State, unique: true);
+            pkce.EnsureIndex(x => x.ExpiresAt);
             
             _logger.LogInformation("Database initialized successfully");
         }

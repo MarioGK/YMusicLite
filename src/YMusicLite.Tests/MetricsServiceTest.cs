@@ -1,4 +1,11 @@
 using YMusicLite.Services;
+using YMusicLite.Services;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Configuration;
+using System.Threading.Tasks;
+using Moq;
+
+// Additional tests may be placed here, but keeping existing file minimal.
 using YMusicLite.Models;
 
 namespace YMusicLite.Tests;

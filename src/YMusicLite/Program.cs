@@ -3,12 +3,8 @@ using YMusicLite.Services;
 using MudBlazor.Services;
 using Serilog;
 using Serilog.Events;
-using Serilog.Sinks.SystemConsole.Themes;
-using System;
-using System.IO;
+using Serilog.Sinks.Console.LogThemes;
 
-// Configure Serilog as the ONLY logging provider
-// Place log files under the application base directory (bin output) to avoid triggering dotnet watch browser refresh loops.
 var logDirectory = Path.Combine(AppContext.BaseDirectory, "logs");
 Directory.CreateDirectory(logDirectory);
 
@@ -18,7 +14,8 @@ Log.Logger = new LoggerConfiguration()
     .MinimumLevel.Override("Microsoft.Hosting.Lifetime", LogEventLevel.Information)
     .Enrich.FromLogContext()
     .Enrich.WithProperty("Application", "YMusicLite")
-    .WriteTo.Console(theme: AnsiConsoleTheme.Sixteen, outputTemplate: "[{Timestamp:HH:mm:ss.fff} {Level:u3}] {SourceContext} {Message:lj}{NewLine}{Exception}")
+    .WriteTo.Console(theme: LogThemes.Code,
+        outputTemplate: "[{Timestamp:HH:mm:ss.fff} {Level:u3}] {SourceContext} {Message:lj}{NewLine}{Exception}")
     .WriteTo.File(Path.Combine(logDirectory, "ymusic-.log"),
         rollingInterval: RollingInterval.Day,
         retainedFileCountLimit: 10,
@@ -55,6 +52,9 @@ builder.Services.AddSingleton<SchedulingService>();
 builder.Services.AddSingleton<ISchedulingService>(provider => provider.GetRequiredService<SchedulingService>());
 builder.Services.AddHostedService<SchedulingService>();
 builder.Services.AddSingleton<IMetricsService, MetricsService>();
+
+// Bind Google OAuth options (PKCE desktop flow)
+builder.Services.Configure<GoogleOAuthOptions>(builder.Configuration.GetSection("GoogleOAuth"));
 
 // Add HTTP client for potential OAuth usage
 builder.Services.AddHttpClient();

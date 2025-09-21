@@ -1,7 +1,6 @@
 using YoutubeExplode;
 using YoutubeExplode.Playlists;
 using YoutubeExplode.Videos;
-using YMusicLite.Models;
 
 namespace YMusicLite.Services;
 

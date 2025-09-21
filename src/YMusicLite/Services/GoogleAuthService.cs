@@ -2,9 +2,8 @@ using Google.Apis.Auth.OAuth2;
 using Google.Apis.Auth.OAuth2.Flows;
 using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Services;
-using Google.Apis.YouTube.v3;
-using Google.Apis.YouTube.v3.Data;
 using Google.Apis.Util.Store;
+using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
 using YMusicLite.Models;
@@ -19,6 +18,7 @@ public interface IGoogleAuthService
     Task RefreshTokenAsync(User user);
     Task RevokeTokenAsync(string userId);
     Task<IReadOnlyList<Google.Apis.YouTube.v3.Data.Playlist>> GetPrivatePlaylistsAsync(string userId, int maxResults = 25);
+    Task<IReadOnlyList<User>> ListAuthenticatedUsersAsync();
 }
 
 public class GoogleAuthService : IGoogleAuthService
@@ -27,56 +27,83 @@ public class GoogleAuthService : IGoogleAuthService
     private readonly ILogger<GoogleAuthService> _logger;
     private readonly IConfiguration _configuration;
     private readonly GoogleAuthorizationCodeFlow _flow;
+    private readonly HttpClient _httpClient;
+    private readonly string _clientId;
     private const string ApplicationName = "YMusicLite";
     private readonly string[] _scopes = new[] { Google.Apis.YouTube.v3.YouTubeService.Scope.YoutubeReadonly };
+
+    // OAuth endpoints (centralized)
+    private const string AuthEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
+    private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
 
     public GoogleAuthService(
         IDatabaseService database,
         ILogger<GoogleAuthService> logger,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHttpClientFactory httpClientFactory,
+        IOptions<GoogleOAuthOptions> oauthOptions)
     {
         _database = database;
         _logger = logger;
         _configuration = configuration;
+        _httpClient = httpClientFactory.CreateClient();
+        _clientId = oauthOptions.Value.ClientId?.Trim() ?? string.Empty;
 
-        // Use only the provided public client ID (desktop application / installed app OAuth flow with PKCE)
-        var clientId = "198027251119-c04chsbao214hcplsf697u2smo682vuq.apps.googleusercontent.com";
-        if (string.IsNullOrWhiteSpace(clientId))
+        if (string.IsNullOrWhiteSpace(_clientId))
         {
-            throw new InvalidOperationException("Google OAuth client ID missing.");
+            throw new InvalidOperationException("Google OAuth client ID missing (GoogleOAuth:ClientId).");
         }
 
+        // Flow is still used to build UserCredential instances (no secret required for PKCE desktop apps)
         _flow = new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer
         {
             ClientSecrets = new ClientSecrets
             {
-                ClientId = clientId,
-                ClientSecret = string.Empty // No secret for installed apps
+                ClientId = _clientId
             },
             Scopes = _scopes,
             DataStore = new CustomDataStore(_database)
         });
-        _logger.LogInformation("GoogleAuthService initialized with public client ID (PKCE)");
+
+        _logger.LogInformation("GoogleAuthService initialized (PKCE desktop) with client id length {Length}", _clientId.Length);
     }
 
-    public Task<string> GetAuthorizationUrlAsync(string userId, string redirectUri)
+    public async Task<string> GetAuthorizationUrlAsync(string userId, string redirectUri)
     {
         try
         {
+            // Persist PKCE code verifier
             var codeVerifier = GenerateCodeVerifier();
-            PkceStore.Set(userId, codeVerifier);
-            var request = _flow.CreateAuthorizationCodeRequest(redirectUri);
-            request.State = userId;
-            var url = request.Build().ToString();
+            var existing = (await _database.PkceSessions.FindAllAsync(p => p.State == userId)).FirstOrDefault();
+            if (existing != null)
+            {
+                existing.CodeVerifier = codeVerifier;
+                existing.CreatedAt = DateTime.UtcNow;
+                existing.ExpiresAt = DateTime.UtcNow.AddMinutes(15);
+                await _database.PkceSessions.UpdateAsync(existing);
+            }
+            else
+            {
+                await _database.PkceSessions.CreateAsync(new PkceSession
+                {
+                    State = userId,
+                    CodeVerifier = codeVerifier,
+                    CreatedAt = DateTime.UtcNow,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(15)
+                });
+            }
 
-            // Append required parameters only if not already present. Some hosting / proxy scenarios may inject values;
-            // Google rejects requests where a parameter like access_type appears multiple times (Error: OAuth 2 parameters can only have a single value)
-            url = EnsureQueryParam(url, "access_type", "offline");
-            url = EnsureQueryParam(url, "prompt", "consent");
-            url = EnsureQueryParam(url, "include_granted_scopes", "true");
-
+            var scope = Uri.EscapeDataString(string.Join(' ', _scopes));
+            var codeChallenge = GenerateCodeChallenge(codeVerifier);
+            var url = $"{AuthEndpoint}?response_type=code" +
+                      $"&client_id={_clientId}" +
+                      $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
+                      $"&scope={scope}" +
+                      $"&state={Uri.EscapeDataString(userId)}" +
+                      "&access_type=offline&prompt=consent&include_granted_scopes=true" +
+                      $"&code_challenge={codeChallenge}&code_challenge_method=S256";
             _logger.LogInformation("Generated authorization URL for user {UserId}", userId);
-            return Task.FromResult(url);
+            return url;
         }
         catch (Exception ex)
         {
@@ -89,17 +116,52 @@ public class GoogleAuthService : IGoogleAuthService
     {
         try
         {
-            codeVerifier ??= PkceStore.Take(userId); // retrieve and remove stored verifier
             if (string.IsNullOrEmpty(codeVerifier))
             {
-                _logger.LogWarning("PKCE code verifier missing for user {UserId}", userId);
+                var session = (await _database.PkceSessions.FindAllAsync(p => p.State == userId)).FirstOrDefault();
+                if (session != null && session.ExpiresAt > DateTime.UtcNow)
+                {
+                    codeVerifier = session.CodeVerifier;
+                    await _database.PkceSessions.DeleteAsync(session.Id);
+                }
             }
 
-            // Library currently does not expose overload with custom parameters in this version; exchange without explicit PKCE parameter (works for installed app with public client if allowed)
-            var token = await _flow.ExchangeCodeForTokenAsync(userId, code, redirectUri, CancellationToken.None);
+            if (string.IsNullOrWhiteSpace(codeVerifier))
+            {
+                _logger.LogWarning("Missing PKCE code_verifier for user {UserId}", userId);
+                throw new InvalidOperationException("PKCE code_verifier missing");
+            }
+
+            var form = new Dictionary<string, string>
+            {
+                {"client_id", _clientId},
+                {"code", code},
+                {"code_verifier", codeVerifier},
+                {"grant_type", "authorization_code"},
+                {"redirect_uri", redirectUri}
+            };
+
+            var response = await _httpClient.PostAsync(TokenEndpoint, new FormUrlEncodedContent(form));
+            var content = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                // Log minimal error information, NOT the whole response body if it contains tokens (here it doesn't on failure)
+                _logger.LogWarning("Token exchange failed Status:{Status} BodyLength:{Len}", response.StatusCode, content.Length);
+                return null;
+            }
+
+            var json = System.Text.Json.JsonDocument.Parse(content).RootElement;
+            var token = new TokenResponse
+            {
+                AccessToken = json.GetProperty("access_token").GetString()!,
+                RefreshToken = json.TryGetProperty("refresh_token", out var rt) ? rt.GetString() : string.Empty,
+                ExpiresInSeconds = json.TryGetProperty("expires_in", out var ei) ? ei.GetInt32() : 3600,
+                IssuedUtc = DateTime.UtcNow
+            };
+            _logger.LogInformation("Token exchange succeeded for user {UserId}", userId);
 
             var credential = new UserCredential(_flow, userId, token);
-            var youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer()
+            var youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
             {
                 HttpClientInitializer = credential,
                 ApplicationName = ApplicationName
@@ -112,10 +174,10 @@ public class GoogleAuthService : IGoogleAuthService
             if (channelsResponse.Items?.Count > 0)
             {
                 var channel = channelsResponse.Items.First();
-
-                var existing = await _database.Users.FindOneAsync(u => u.GoogleId == userId);
+                var channelId = channel.Id ?? userId;
+                var existing = await _database.Users.FindOneAsync(u => u.GoogleId == channelId);
                 var user = existing ?? new User();
-                user.GoogleId = userId;
+                user.GoogleId = channelId;
                 user.DisplayName = channel.Snippet.Title ?? "Unknown";
                 user.AccessToken = token.AccessToken;
                 user.RefreshToken = token.RefreshToken ?? existing?.RefreshToken ?? string.Empty;
@@ -127,24 +189,25 @@ public class GoogleAuthService : IGoogleAuthService
                 {
                     user.CreatedAt = DateTime.UtcNow;
                     await _database.Users.CreateAsync(user);
-                    _logger.LogInformation("Created new user record for GoogleId {GoogleId}", userId);
+                    _logger.LogInformation("Created new user record {GoogleId}", user.GoogleId);
                 }
                 else
                 {
                     await _database.Users.UpdateAsync(user);
-                    _logger.LogInformation("Updated existing user record for GoogleId {GoogleId}", userId);
+                    _logger.LogInformation("Updated user record {GoogleId}", user.GoogleId);
                 }
 
-                _logger.LogInformation("User authenticated successfully: {DisplayName}", user.DisplayName);
+                _logger.LogInformation("User authenticated: {DisplayName}", user.DisplayName);
                 return user;
             }
 
-            _logger.LogWarning("No channel found for user: {UserId}", userId);
+            _logger.LogWarning("No channel found for user {UserId}", userId);
             return null;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to authorize user: {UserId}", userId);
+            if (ex is InvalidOperationException) throw;
             return null;
         }
     }
@@ -161,23 +224,24 @@ public class GoogleAuthService : IGoogleAuthService
             }
 
             var remaining = user.TokenExpiry - DateTime.UtcNow;
+            if (remaining < TimeSpan.FromMinutes(2))
+            {
+                _logger.LogInformation("Access token near expiry for {UserId}, performing manual refresh", userId);
+                await ManualRefreshAsync(user);
+                user = await _database.Users.FindOneAsync(u => u.GoogleId == userId) ?? user;
+                remaining = user.TokenExpiry - DateTime.UtcNow;
+            }
+
+            var approxIssued = DateTime.UtcNow - (user.TokenExpiry - DateTime.UtcNow);
             var token = new TokenResponse
             {
                 AccessToken = user.AccessToken,
                 RefreshToken = user.RefreshToken,
                 ExpiresInSeconds = remaining > TimeSpan.Zero ? (long)remaining.TotalSeconds : 0,
-                IssuedUtc = user.TokenExpiry - (user.TokenExpiry - DateTime.UtcNow)
+                IssuedUtc = approxIssued
             };
 
-            var credential = new UserCredential(_flow, userId, token);
-            // Refresh proactively if near expiry
-            if (remaining < TimeSpan.FromMinutes(2))
-            {
-                _logger.LogInformation("Access token near expiry for {UserId}, refreshing", userId);
-                await credential.RefreshTokenAsync(CancellationToken.None);
-                await UpdateUserTokensAsync(userId, credential.Token);
-            }
-            return credential;
+            return new UserCredential(_flow, userId, token);
         }
         catch (Exception ex)
         {
@@ -190,16 +254,7 @@ public class GoogleAuthService : IGoogleAuthService
     {
         try
         {
-            var credentials = await GetCredentialsAsync(user.GoogleId);
-            if (credentials?.Token != null)
-            {
-                var refreshed = await credentials.RefreshTokenAsync(CancellationToken.None);
-                if (refreshed)
-                {
-                    await UpdateUserTokensAsync(user.GoogleId, credentials.Token);
-                    _logger.LogInformation("Token refreshed for user: {UserId}", user.GoogleId);
-                }
-            }
+            await ManualRefreshAsync(user);
         }
         catch (Exception ex)
         {
@@ -260,18 +315,50 @@ public class GoogleAuthService : IGoogleAuthService
         return (IReadOnlyList<Google.Apis.YouTube.v3.Data.Playlist>)list.ToList();
     }
 
-    private async Task UpdateUserTokensAsync(string userId, TokenResponse token)
+    private async Task ManualRefreshAsync(User user)
     {
-        var user = await _database.Users.FindOneAsync(u => u.GoogleId == userId);
-        if (user == null) return;
-        user.AccessToken = token.AccessToken;
-        if (!string.IsNullOrEmpty(token.RefreshToken))
+        if (string.IsNullOrEmpty(user.RefreshToken))
         {
-            user.RefreshToken = token.RefreshToken; // Only update if provided
+            _logger.LogWarning("Cannot refresh token: no refresh token stored for {UserId}", user.GoogleId);
+            return;
         }
-        user.TokenExpiry = token.IssuedUtc.AddSeconds(token.ExpiresInSeconds ?? 3600);
-        user.UpdatedAt = DateTime.UtcNow;
-        await _database.Users.UpdateAsync(user);
+
+        var form = new Dictionary<string, string>
+        {
+            {"client_id", _clientId},
+            {"grant_type", "refresh_token"},
+            {"refresh_token", user.RefreshToken}
+        };
+
+        var response = await _httpClient.PostAsync(TokenEndpoint, new FormUrlEncodedContent(form));
+        var content = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogError("Manual refresh failed for {UserId} Status:{Status} BodyLength:{Len}", user.GoogleId, response.StatusCode, content.Length);
+            return;
+        }
+
+        try
+        {
+            var json = System.Text.Json.JsonDocument.Parse(content).RootElement;
+            var accessToken = json.GetProperty("access_token").GetString();
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                _logger.LogError("Manual refresh response missing access_token for {UserId}", user.GoogleId);
+                return;
+            }
+            var expires = json.TryGetProperty("expires_in", out var ei) ? ei.GetInt32() : 3600;
+
+            user.AccessToken = accessToken;
+            user.TokenExpiry = DateTime.UtcNow.AddSeconds(expires);
+            user.UpdatedAt = DateTime.UtcNow;
+            await _database.Users.UpdateAsync(user);
+            _logger.LogInformation("Access token refreshed for user {UserId}", user.GoogleId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed parsing refresh response for {UserId}", user.GoogleId);
+        }
     }
 
     private static string GenerateCodeVerifier()
@@ -295,12 +382,21 @@ public class GoogleAuthService : IGoogleAuthService
             .Replace('/', '_');
     }
 
-    private static string EnsureQueryParam(string url, string key, string value)
+    public async Task<IReadOnlyList<User>> ListAuthenticatedUsersAsync()
     {
-        // If key already present (even with different value) do not duplicate
-        if (url.Contains(key + "=")) return url;
-        var separator = url.Contains('?') ? '&' : '?';
-        return url + separator + key + "=" + Uri.EscapeDataString(value);
+        var users = await _database.Users.GetAllAsync();
+        return users.Where(u => !string.IsNullOrEmpty(u.AccessToken) && u.TokenExpiry > DateTime.UtcNow.AddMinutes(-5))
+                    .OrderByDescending(u => u.UpdatedAt)
+                    .ToList();
+    }
+
+    private async Task CleanupExpiredPkceAsync()
+    {
+        var expired = await _database.PkceSessions.FindAllAsync(s => s.ExpiresAt < DateTime.UtcNow.AddMinutes(-1));
+        foreach (var s in expired)
+        {
+            await _database.PkceSessions.DeleteAsync(s.Id);
+        }
     }
 }
 
@@ -316,20 +412,18 @@ public class CustomDataStore : IDataStore
 
     public async Task StoreAsync<T>(string key, T value)
     {
-        // Store OAuth tokens in user records instead of separate token store
         await Task.CompletedTask;
     }
 
     public async Task DeleteAsync<T>(string key)
     {
-        // Handle token deletion
         await Task.CompletedTask;
     }
 
     public async Task<T> GetAsync<T>(string key)
     {
         await Task.CompletedTask;
-        return default!; // tokens managed elsewhere
+        return default!;
     }
 
     public async Task ClearAsync()
@@ -337,31 +431,4 @@ public class CustomDataStore : IDataStore
         await Task.CompletedTask;
     }
 }
-
-// Simple in-memory PKCE verifier store (not persisted). For production consider expiring entries.
-internal static class PkceStore
-{
-    private static readonly Dictionary<string, string> _verifiers = new();
-    private static readonly object _lock = new();
-
-    public static void Set(string userId, string verifier)
-    {
-        lock (_lock)
-        {
-            _verifiers[userId] = verifier;
-        }
-    }
-
-    public static string? Take(string userId)
-    {
-        lock (_lock)
-        {
-            if (_verifiers.TryGetValue(userId, out var v))
-            {
-                _verifiers.Remove(userId);
-                return v;
-            }
-            return null;
-        }
-    }
-}
+// End GoogleAuthService

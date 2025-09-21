@@ -15,6 +15,21 @@ We request only the `youtube.readonly` scope to read your private playlists. Tok
 
 After authenticating via `/auth`, your private playlists are fetched and displayed. You can revoke access, and the application will handle token refresh automatically when near expiry.
 
+### Multi-Account Support
+You can add multiple YouTube accounts. The authentication page lists existing authenticated accounts and lets you switch between them. Each account is keyed by its YouTube Channel ID rather than a transient state value for stability.
+
+### Resilience & Retries
+The token exchange now includes exponential backoff (up to 4 attempts) for transient Google errors (5xx, 429, internal_failure). This improves reliability when Google's OAuth endpoints experience intermittent issues.
+
+### PKCE Persistence
+The PKCE code_verifier is now stored briefly (15 minutes) in the local database. This allows you to start authentication, restart the app (or reload the server), and still successfully complete the callback without losing the verifier. After a successful (or attempted) token exchange the verifier entry is deleted. Expired entries are cleaned up opportunistically.
+
+If you encounter the error `client_secret is missing` during token exchange, verify that:
+1. The OAuth client in Google Cloud Console is of type "Desktop app" (Installed application)
+2. You're using the correct public client ID shown above
+3. The redirect URI you supply matches exactly what you passed when building the authorization URL
+4. You are not reusing an already consumed authorization code
+
 - 🎵 **Modern UI**: Built with MudBlazor featuring a dark theme with configurable colors
 - 📊 **Dashboard**: Statistics and activity overview
 - ⚡ **Real-Time Metrics**: Live download speed, active download count, average progress, and sync status

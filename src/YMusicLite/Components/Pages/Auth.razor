@@ -1,5 +1,4 @@
 @page "/auth"
-@using YMusicLite.Services
 @inject IGoogleAuthService GoogleAuthService
 @inject IJSRuntime JSRuntime
 @inject NavigationManager Navigation
@@ -32,6 +31,18 @@
             <MudAlert Severity="Severity.Success" Class="mb-4">
                 Successfully authenticated as @UserDisplayName
             </MudAlert>
+            @if (Accounts.Any())
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Accounts</MudText>
+                <MudList T="string" Dense="true" Class="mb-4">
+                    @foreach (var acc in Accounts)
+                    {
+                        <MudListItem T="string" OnClick="@(() => SelectAccount(acc.GoogleId))">
+                            @(acc.DisplayName) <MudChip Class="ml-2" Color="@(acc.GoogleId==CurrentUserId?Color.Success:Color.Default)" Size="Size.Small">@(acc.GoogleId==CurrentUserId?"Active":"Switch")</MudChip>
+                        </MudListItem>
+                    }
+                </MudList>
+            }
             @if (PrivatePlaylists.Any())
             {
                 <MudText Typo="Typo.h6" Class="mb-2">Your Private Playlists (first @PrivatePlaylists.Count)</MudText>
@@ -46,12 +57,15 @@
             {
                 <MudText Typo="Typo.body2" Class="mb-4">No playlists retrieved yet.</MudText>
             }
-            <div class="d-flex justify-center">
+            <div class="d-flex justify-center mb-2">
                 <MudButton Variant="Variant.Filled" 
                           Color="Color.Primary" 
                           OnClick="NavigateToPlaylists">
                     Go to Playlists
                 </MudButton>
+            </div>
+            <div class="d-flex justify-center">
+                <MudButton Variant="Variant.Outlined" Color="Color.Secondary" StartIcon="@Icons.Material.Filled.Add" OnClick="StartAuthentication">Add Another Account</MudButton>
             </div>
         }
         else
@@ -80,6 +94,8 @@
     private string ErrorMessage = string.Empty;
     private string UserDisplayName = string.Empty;
     private List<Google.Apis.YouTube.v3.Data.Playlist> PrivatePlaylists = new();
+    private List<User> Accounts = new();
+    private string? CurrentUserId;
 
     [Parameter, SupplyParameterFromQuery]
     public string? Code { get; set; }
@@ -101,6 +117,10 @@
         {
             HasError = true;
             ErrorMessage = $"Authentication failed: {Error}";
+        }
+        else
+        {
+            await LoadAccounts();
         }
     }
 
@@ -153,6 +173,7 @@
             {
                 IsAuthenticated = true;
                 UserDisplayName = user.DisplayName;
+                CurrentUserId = user.GoogleId;
                 // Fetch initial set of private playlists
                 var lists = await GoogleAuthService.GetPrivatePlaylistsAsync(user.GoogleId, 25);
                 PrivatePlaylists = lists.ToList();
@@ -162,6 +183,7 @@
                 
                 // Store authenticated user info for the session
                 await JSRuntime.InvokeVoidAsync("localStorage.setItem", "currentUserId", user.GoogleId);
+                await LoadAccounts();
             }
             else
             {
@@ -183,5 +205,50 @@
     private void NavigateToPlaylists()
     {
         Navigation.NavigateTo("/playlists");
+    }
+
+    private async Task LoadAccounts()
+    {
+        try
+        {
+            var list = await GoogleAuthService.ListAuthenticatedUsersAsync();
+            Accounts = list.ToList();
+            CurrentUserId ??= await JSRuntime.InvokeAsync<string>("localStorage.getItem", "currentUserId");
+            if (!string.IsNullOrEmpty(CurrentUserId) && Accounts.All(a => a.GoogleId != CurrentUserId))
+            {
+                CurrentUserId = Accounts.FirstOrDefault()?.GoogleId;
+            }
+            if (!string.IsNullOrEmpty(CurrentUserId))
+            {
+                IsAuthenticated = true;
+                var active = Accounts.FirstOrDefault(a => a.GoogleId == CurrentUserId);
+                if (active != null)
+                {
+                    UserDisplayName = active.DisplayName;
+                    var lists = await GoogleAuthService.GetPrivatePlaylistsAsync(CurrentUserId, 25);
+                    PrivatePlaylists = lists.ToList();
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to load accounts: {ex.Message}");
+        }
+        StateHasChanged();
+    }
+
+    private async Task SelectAccount(string googleId)
+    {
+        CurrentUserId = googleId;
+        await JSRuntime.InvokeVoidAsync("localStorage.setItem", "currentUserId", googleId);
+        var lists = await GoogleAuthService.GetPrivatePlaylistsAsync(googleId, 25);
+        PrivatePlaylists = lists.ToList();
+        var acc = Accounts.FirstOrDefault(a => a.GoogleId == googleId);
+        if (acc != null)
+        {
+            UserDisplayName = acc.DisplayName;
+        }
+        IsAuthenticated = true;
+        StateHasChanged();
     }
 }
