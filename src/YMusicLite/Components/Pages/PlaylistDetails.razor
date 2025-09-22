@@ -1,0 +1,414 @@
+@page "/playlists/{Id}"
+@implements IDisposable
+@using MudBlazor
+@inject IDatabaseService Database
+@inject ISyncService SyncService
+@inject IDownloadService DownloadService
+@inject IConfiguration Configuration
+@inject ISnackbar Snackbar
+@inject ILogger<PlaylistDetails> Logger
+
+<PageTitle>Playlist Details - YMusicLite</PageTitle>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Class="mb-4" />
+}
+else if (_playlist == null)
+{
+    <MudAlert Severity="Severity.Error" Elevation="0" Class="my-6">
+        Playlist not found.
+    </MudAlert>
+}
+else
+{
+    <div class="d-flex justify-space-between align-center mb-4">
+        <div class="d-flex align-center">
+            <MudIcon Icon="@Icons.Material.Filled.PlaylistPlay" Size="Size.Large" Class="mr-3" />
+            <div>
+                <MudText Typo="Typo.h4">@_playlist.Name</MudText>
+                <MudText Typo="Typo.subtitle2" Color="Color.Secondary">
+                    @_playlist.TotalTracks tracks • @_playlist.DownloadedTracks downloaded
+                </MudText>
+                <MudStack Row="true" Spacing="1" Class="mt-2">
+                    <MudChip T="string" Color="@GetStatusColor(_playlist.Status)" Size="Size.Small" Variant="Variant.Filled">
+                        @_playlist.Status
+                    </MudChip>
+                    @if (_playlist.AutoSync)
+                    {
+                        <MudChip T="string" Color="Color.Info" Size="Size.Small" Variant="Variant.Outlined">
+                            Auto Sync
+                        </MudChip>
+                    }
+                    @if (!string.IsNullOrEmpty(_playlist.LastSyncError))
+                    {
+                        <MudTooltip Text="@_playlist.LastSyncError">
+                            <MudChip T="string" Color="Color.Error" Size="Size.Small" Variant="Variant.Outlined">
+                                Error
+                            </MudChip>
+                        </MudTooltip>
+                    }
+                </MudStack>
+            </div>
+        </div>
+        <MudStack Row="true" Spacing="2">
+            <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.ArrowBack" OnClick="GoBack">
+                Back
+            </MudButton>
+            <MudButton Variant="Variant.Outlined"
+                       Color="Color.Primary"
+                       Disabled="@_busy"
+                       StartIcon="@Icons.Material.Filled.Refresh"
+                       OnClick="@Reload">
+                Refresh
+            </MudButton>
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Primary"
+                       Disabled="@_busy"
+                       StartIcon="@Icons.Material.Filled.Sync"
+                       OnClick="@StartSync">
+                @if (_busy)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                }
+                Sync Now
+            </MudButton>
+            <MudButton Variant="Variant.Filled"
+                       Color="Color.Success"
+                       Disabled="@(!_tracks.Any(t => t.Status == TrackStatus.Error || t.Status == TrackStatus.Pending) || _retrying)"
+                       StartIcon="@Icons.Material.Filled.Replay"
+                       OnClick="@RetryPendingOrFailed">
+                @if (_retrying)
+                {
+                    <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-1" />
+                }
+                Retry Failed/Pending
+            </MudButton>
+        </MudStack>
+    </div>
+
+    <MudPaper Class="pa-4 mb-4">
+        <MudText Typo="Typo.subtitle1" Class="mb-2">Metadata</MudText>
+        <MudGrid>
+            <MudItem xs="12" md="4">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">YouTube ID</MudText>
+                <MudText>@_playlist.YouTubeId</MudText>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Last Sync Completed</MudText>
+                <MudText>@(_playlist.LastSyncCompleted?.ToString("g") ?? "Never")</MudText>
+            </MudItem>
+            <MudItem xs="12" md="4">
+                <MudText Typo="Typo.caption" Color="Color.Secondary">Last Sync Started</MudText>
+                <MudText>@(_playlist.LastSyncStarted?.ToString("g") ?? "Never")</MudText>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <MudPaper Class="pa-4">
+        <MudText Typo="Typo.h6" Class="mb-2">Tracks</MudText>
+        <MudText Typo="Typo.caption" Color="Color.Secondary" Class="mb-2">
+            Showing @_tracks.Count tracks. Completed: @_tracks.Count(t => t.Status == TrackStatus.Completed)
+        </MudText>
+
+        <MudTable Items="@_tracks" Hover="true" Dense="true" Bordered="true" @ref="_table">
+            <HeaderContent>
+                <MudTh style="width:40px;"></MudTh>
+                <MudTh>Title</MudTh>
+                <MudTh>Artist</MudTh>
+                <MudTh>Duration</MudTh>
+                <MudTh>Status</MudTh>
+                <MudTh style="width:160px;">Progress</MudTh>
+                <MudTh>Size</MudTh>
+                <MudTh>Error</MudTh>
+                <MudTh style="width:140px;">Actions</MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>
+                    <MudIcon Icon="@Icons.Material.Filled.AudioFile" Size="Size.Small" Color="GetTrackIconColor(context.Status)" />
+                </MudTd>
+                <MudTd>@context.Title</MudTd>
+                <MudTd>@context.Artist</MudTd>
+                <MudTd>@FormatDuration(context.Duration)</MudTd>
+                <MudTd>
+                    <MudChip T="string" Color="GetTrackStatusColor(context.Status)" Size="Size.Small" Variant="Variant.Filled">
+                        @context.Status
+                    </MudChip>
+                </MudTd>
+                <MudTd>
+                    @if (context.Status is TrackStatus.Pending)
+                    {
+                        <MudText Typo="Typo.caption" Color="Color.Secondary">Pending</MudText>
+                    }
+                    else if (context.Status is TrackStatus.Downloading or TrackStatus.Converting)
+                    {
+                        <MudProgressLinear Value="context.DownloadProgress" Color="Color.Primary" />
+                    }
+                    else if (context.Status == TrackStatus.Completed)
+                    {
+                        <MudProgressLinear Value="100" Color="Color.Success" />
+                    }
+                    else if (context.Status == TrackStatus.Error)
+                    {
+                        <MudProgressLinear Value="context.DownloadProgress" Color="Color.Error" />
+                    }
+                    else
+                    {
+                        <MudProgressLinear Value="0" Color="Color.Default" />
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (context.FileSizeBytes > 0)
+                    {
+                        @($"{context.FileSizeBytes / 1024.0 / 1024.0:F2} MB")
+                    }
+                </MudTd>
+                <MudTd>
+                    @if (!string.IsNullOrWhiteSpace(context.ErrorMessage))
+                    {
+                        <MudTooltip Text="@context.ErrorMessage">
+                            <MudIcon Icon="@Icons.Material.Filled.ErrorOutline" Color="Color.Error" />
+                        </MudTooltip>
+                    }
+                </MudTd>
+                <MudTd>
+                    <MudButton Variant="Variant.Text"
+                               Color="Color.Primary"
+                               Disabled="@(_retrying || _busy || context.Status == TrackStatus.Downloading || context.Status == TrackStatus.Converting)"
+                               OnClick="@(() => RetrySingle(context))"
+                               StartIcon="@Icons.Material.Filled.Download">
+                        Retry
+                    </MudButton>
+                </MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Color="Color.Secondary" Class="pa-4">No tracks found.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudPaper>
+}
+
+@code {
+    [Parameter] public string Id { get; set; } = string.Empty;
+
+    private Playlist? _playlist;
+    private List<Track> _tracks = new();
+    private bool _loading = true;
+    private bool _busy = false;
+    private bool _retrying = false;
+    private Timer? _refreshTimer;
+    private MudTable<Track>? _table;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadData();
+        SetupAutoRefresh();
+    }
+
+    private void SetupAutoRefresh()
+    {
+        _refreshTimer?.Dispose();
+        _refreshTimer = new Timer(async _ =>
+        {
+            if (_busy || _retrying) return;
+            await InvokeAsync(async () =>
+            {
+                await LoadTracksOnly();
+                StateHasChanged();
+            });
+        }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+    }
+
+    private async Task LoadData()
+    {
+        try
+        {
+            _loading = true;
+            _playlist = await Database.Playlists.GetByIdAsync(Id);
+            await LoadTracksOnly();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load playlist detail");
+            Snackbar.Add("Failed to load playlist detail", Severity.Error);
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private async Task LoadTracksOnly()
+    {
+        if (_playlist == null) return;
+        var tracks = await Database.Tracks.FindAllAsync(t => t.PlaylistId == _playlist.Id.ToString());
+        _tracks = tracks
+            .OrderByDescending(t => t.Status == TrackStatus.Error)
+            .ThenBy(t => t.Status == TrackStatus.Pending ? 0 : 1)
+            .ThenBy(t => t.Title)
+            .ToList();
+    }
+
+    private async Task Reload()
+    {
+        await LoadData();
+        StateHasChanged();
+    }
+
+    private async Task StartSync()
+    {
+        if (_playlist == null) return;
+        if (_busy) return;
+        _busy = true;
+        try
+        {
+            await SyncService.SyncPlaylistAsync(_playlist.Id.ToString(), SyncJobType.Manual);
+            Snackbar.Add("Sync started", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to start sync");
+            Snackbar.Add("Failed to start sync", Severity.Error);
+        }
+        finally
+        {
+            _busy = false;
+            await LoadData();
+            StateHasChanged();
+        }
+    }
+
+    private async Task RetryPendingOrFailed()
+    {
+        if (_playlist == null) return;
+        if (_retrying) return;
+        _retrying = true;
+        try
+        {
+            var basePath = GetDownloadPath(_playlist.Name);
+            var candidates = _tracks.Where(t =>
+                t.Status == TrackStatus.Error || t.Status == TrackStatus.Pending).ToList();
+
+            if (!candidates.Any())
+            {
+                Snackbar.Add("No failed or pending tracks to retry", Severity.Info);
+                return;
+            }
+
+            int success = 0;
+            foreach (var track in candidates)
+            {
+                var ok = await DownloadService.DownloadTrackAsync(track, basePath, null);
+                if (ok) success++;
+            }
+
+            Snackbar.Add($"Retry complete. {success}/{candidates.Count} succeeded.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Retry failed");
+            Snackbar.Add("Retry operation failed", Severity.Error);
+        }
+        finally
+        {
+            _retrying = false;
+            await LoadTracksOnly();
+            StateHasChanged();
+        }
+    }
+
+    private async Task RetrySingle(Track track)
+    {
+        if (_playlist == null) return;
+        if (_retrying) return;
+        _retrying = true;
+        try
+        {
+            var basePath = GetDownloadPath(_playlist.Name);
+            var ok = await DownloadService.DownloadTrackAsync(track, basePath, null);
+            Snackbar.Add(ok ? "Track downloaded" : "Track retry failed", ok ? Severity.Success : Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Single retry failed");
+            Snackbar.Add("Track retry failed", Severity.Error);
+        }
+        finally
+        {
+            _retrying = false;
+            await LoadTracksOnly();
+            StateHasChanged();
+        }
+    }
+
+    private string GetDownloadPath(string playlistName)
+    {
+        var basePath = Configuration.GetValue<string>("DownloadPath", "/app/data/downloads");
+        var safe = GetSafeFileName(playlistName);
+        var path = Path.Combine(basePath, safe);
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static string GetSafeFileName(string fileName)
+    {
+        var invalidChars = Path.GetInvalidFileNameChars();
+        var safeName = fileName;
+        foreach (var c in invalidChars)
+            safeName = safeName.Replace(c, '_');
+        while (safeName.Contains("__"))
+            safeName = safeName.Replace("__", "_");
+        return safeName.Trim('_').Trim();
+    }
+
+    private string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalHours >= 1)
+            return duration.ToString(@"h\:mm\:ss");
+        return duration.ToString(@"mm\:ss");
+    }
+
+    private Color GetStatusColor(PlaylistStatus status) => status switch
+    {
+        PlaylistStatus.Idle => Color.Default,
+        PlaylistStatus.Syncing => Color.Info,
+        PlaylistStatus.Downloading => Color.Warning,
+        PlaylistStatus.Completed => Color.Success,
+        PlaylistStatus.Error => Color.Error,
+        _ => Color.Default
+    };
+
+    private Color GetTrackStatusColor(TrackStatus status) => status switch
+    {
+        TrackStatus.Pending => Color.Default,
+        TrackStatus.Downloading => Color.Info,
+        TrackStatus.Converting => Color.Warning,
+        TrackStatus.Completed => Color.Success,
+        TrackStatus.Error => Color.Error,
+        TrackStatus.Skipped => Color.Secondary,
+        _ => Color.Default
+    };
+
+    private Color GetTrackIconColor(TrackStatus status) => status switch
+    {
+        TrackStatus.Completed => Color.Success,
+        TrackStatus.Error => Color.Error,
+        TrackStatus.Downloading => Color.Info,
+        TrackStatus.Converting => Color.Warning,
+        _ => Color.Secondary
+    };
+
+    private void GoBack()
+    {
+        // Navigate back using JS history (simplest approach)
+        // Could inject NavigationManager, but not required; we can just use it now.
+        Navigation.NavigateTo("/playlists");
+    }
+
+    [Inject] public NavigationManager Navigation { get; set; } = default!;
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+    }
+}

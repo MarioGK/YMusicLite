@@ -34,10 +34,21 @@ If you encounter the error `client_secret is missing` during token exchange, ver
 - 📊 **Dashboard**: Statistics and activity overview
 - ⚡ **Real-Time Metrics**: Live download speed, active download count, average progress, and sync status
 - 📝 **Playlist Management**: Create, edit, and manage YouTube playlists
-- 🎧 **Audio Download**: Convert YouTube videos to MP3 format
-- 🔄 **Sync Management**: Automatic and scheduled playlist synchronization
+- 🎧 **Audio Download**: Convert YouTube videos to MP3 format (automatic MP3 conversion via YoutubeExplode + FFmpeg integration)
+- 🔄 **Sync Management**: Manual, scheduled, and strict (removal) sync modes
+- ⏱️ **Auto Sync Scheduling**: Multiple CRON expressions per playlist (e.g. "0 3 * * *" for daily 3 AM)
+- ❤️ **Liked Songs Support (LM)**: Virtual "Liked Songs" playlist (myRating=like) for authenticated accounts
+- 🧩 **Incremental & Strict Modes**: Keep all historical tracks or prune removed ones based on Sync Mode toggle
+- 🗂️ **Playlist Detail View**: Per-track status (Pending, Downloading, Converting, Completed, Error) with retry (single or bulk)
+- ♻️ **Retry Failed/Pending**: Re-attempt only failed/pending tracks with progress feedback
+- ❌ **Cancellation**: Cancel active sync jobs safely (graceful token-based cancellation)
+- 🏷️ **Tagging & Filtering**: Add arbitrary tags to playlists; real-time text + tag filtering
+- 🔁 **Bulk Sync**: Trigger sync for all idle playlists with one click
+- 🔐 **Multi-Account OAuth**: Multiple Google accounts with PKCE desktop-style OAuth and token persistence
 - 🗄️ **Local Storage**: LiteDB for offline persistence
 - ⚙️ **Configurable**: Flexible settings for downloads and audio quality
+- 🧪 **Test Suite**: xUnit + bUnit tests for services and Blazor components
+- 📈 **Metrics Aggregation**: Centralized runtime metrics (active sync %, download speed, progress averages)
 - 🐳 **Docker Ready**: Containerized for easy deployment
 
 ## Technologies Used
@@ -155,6 +166,71 @@ docker-compose up -d
 2. **Add Playlists**: Navigate to Playlists and add YouTube playlist URLs
 3. **Configure Settings**: Adjust download preferences and quality settings
 4. **Monitor Downloads**: Track download progress and sync history
+5. **Open Playlist Detail**: Click a playlist name to view per-track statuses and retry failures
+6. **Enable Auto Sync**: Edit a playlist, toggle Auto Sync, and specify one or more CRON expressions (one per line)
+7. **Use Liked Songs (LM)**: Enter "LM" as the playlist identifier after authenticating to sync liked videos
+8. **Tag & Organize**: Add tags (space or comma separated) in the playlist dialog; filter via the top bar
+9. **Bulk Sync**: Use the Bulk Sync button to start sync for all non-busy playlists
+
+### Auto Sync & Scheduling
+
+Playlists support multiple CRON expressions (standard 5-field format). Example expressions:
+- `0 3 * * *` → Daily at 03:00
+- `*/30 * * * *` → Every 30 minutes
+- `0 */6 * * *` → Every 6 hours
+
+When Auto Sync is enabled:
+- Each expression is scheduled independently
+- Schedules are reloaded on startup
+- Disabling Auto Sync unschedules all associated timers
+
+### Liked Songs Virtual Playlist (LM)
+
+Specify `LM` (or a URL containing `list=LM`) to create a virtual playlist of your liked YouTube / YouTube Music videos:
+- Requires an authenticated Google/YouTube account
+- Tracks enumerated via `videos.list` `myRating=like`
+- Duration filtering still applies
+- Video count is dynamic and may appear as 0 until sync enumerates tracks
+
+### Playlist Detail & Track Retry
+
+The playlist details page provides:
+- Real-time auto-refresh (5s interval)
+- Track progress bars (download, convert, complete, error)
+- Bulk retry for failed/pending tracks
+- Single-track retry action
+- Error tooltips per track
+
+### Strict Sync Mode
+
+If enabled (Sync Mode = Strict), tracks removed from the YouTube playlist are also deleted locally (and their files removed).
+If disabled, removed tracks remain archived locally.
+
+### Cancellation
+
+While a sync is running or downloading:
+- Cancel from the playlist card (Cancel button replaces Sync)
+- State reverts to Idle (or Error if failure occurred)
+- Active sync metrics update and job logs persisted
+
+### Testing
+
+Run tests after restoring dependencies:
+```bash
+dotnet test
+```
+
+Test coverage includes:
+- SyncService behavior (idempotent start, cancellation)
+- Playlists page UI logic (rendering, sync trigger, validation)
+- Metrics basic calculations
+- Database CRUD (integration sample)
+
+### Development Notes
+
+- All timestamps stored in UTC
+- `UpdatedAt` maintained for playlists & tracks on state transitions
+- Retry & incremental updates are safe across restarts due to persisted state in LiteDB
 
 ## Architecture
 

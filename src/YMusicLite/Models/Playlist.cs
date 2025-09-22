@@ -11,6 +11,7 @@ public class Playlist
     public string YouTubeId { get; set; } = string.Empty;
     public string YouTubeUrl { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
+    public List<string> Tags { get; set; } = new(); // New: user-defined tags (for filtering & organization)
     
     // Configuration
     public bool SyncMode { get; set; } = true;

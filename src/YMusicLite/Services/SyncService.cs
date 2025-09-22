@@ -75,11 +75,12 @@ public class SyncService : ISyncService
             _activeSyncs[syncJob.Id.ToString()] = syncCts;
         }
 
-        // Update playlist status
-        playlist.Status = PlaylistStatus.Syncing;
-        playlist.LastSyncStarted = DateTime.UtcNow;
-        playlist.LastSyncError = null;
-        await _database.Playlists.UpdateAsync(playlist);
+         // Update playlist status
+         playlist.Status = PlaylistStatus.Syncing;
+         playlist.LastSyncStarted = DateTime.UtcNow;
+         playlist.LastSyncError = null;
+         playlist.UpdatedAt = DateTime.UtcNow;
+         await _database.Playlists.UpdateAsync(playlist);
 
         // Start sync process in background
         _ = Task.Run(async () =>
@@ -143,6 +144,7 @@ public class SyncService : ISyncService
                 if (playlist != null)
                 {
                     playlist.Status = PlaylistStatus.Idle;
+                    playlist.UpdatedAt = DateTime.UtcNow;
                     await _database.Playlists.UpdateAsync(playlist);
                 }
             }
@@ -282,6 +284,7 @@ public class SyncService : ISyncService
 
             // Download tracks
             playlist.Status = PlaylistStatus.Downloading;
+            playlist.UpdatedAt = DateTime.UtcNow;
             await _database.Playlists.UpdateAsync(playlist);
 
             var downloadPath = GetDownloadPath(playlist);
@@ -352,6 +355,7 @@ public class SyncService : ISyncService
 
         playlist.Status = PlaylistStatus.Error;
         playlist.LastSyncError = errorMessage;
+        playlist.UpdatedAt = DateTime.UtcNow;
         await _database.Playlists.UpdateAsync(playlist);
 
         syncJob.Status = SyncJobStatus.Failed;
@@ -368,6 +372,7 @@ public class SyncService : ISyncService
         _logger.LogInformation("Sync cancelled for playlist: {PlaylistId}", playlist.Id);
 
         playlist.Status = PlaylistStatus.Idle;
+        playlist.UpdatedAt = DateTime.UtcNow;
         await _database.Playlists.UpdateAsync(playlist);
 
         syncJob.Status = SyncJobStatus.Cancelled;

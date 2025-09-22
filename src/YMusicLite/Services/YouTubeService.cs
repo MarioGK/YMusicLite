@@ -149,7 +149,7 @@ public class YouTubeService : IYouTubeService
                 return result;
             }
 
-            var yt = new YouTubeService(new Google.Apis.Services.BaseClientService.Initializer
+            var yt = new Google.Apis.YouTube.v3.YouTubeService(new Google.Apis.Services.BaseClientService.Initializer
             {
                 HttpClientInitializer = credentials,
                 ApplicationName = "YMusicLite"
@@ -174,8 +174,14 @@ public class YouTubeService : IYouTubeService
                         var durationIso = v.ContentDetails?.Duration;
                         if (!string.IsNullOrEmpty(durationIso))
                         {
-                            if (System.Xml.XmlConvert.TryToTimeSpan(durationIso, out var ts))
-                                duration = ts;
+                            try
+                            {
+                                duration = System.Xml.XmlConvert.ToTimeSpan(durationIso);
+                            }
+                            catch
+                            {
+                                // ignore parse failure
+                            }
                         }
 
                         result.Add(new TrackInfo

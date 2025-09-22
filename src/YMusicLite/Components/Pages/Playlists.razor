@@ -1,47 +1,114 @@
 @page "/playlists"
+@implements IDisposable
+@using Cronos
 @inject IDatabaseService Database
 @inject IYouTubeService YouTubeService
 @inject ISnackbar Snackbar
 @inject ILogger<Playlists> Logger
+@inject ISyncService SyncService
+@inject ISchedulingService SchedulingService
 
 <PageTitle>Playlists - YMusicLite</PageTitle>
 
 <div class="d-flex justify-space-between align-center mb-4">
-    <MudText Typo="Typo.h3">Playlists</MudText>
-    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="@OpenCreateDialog">
-        Add Playlist
-    </MudButton>
+    <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+        <MudText Typo="Typo.h3" Class="mr-4">Playlists</MudText>
+        <MudTextField @bind-Value="_search"
+                      Label="Search"
+                      Immediate="true"
+                      Variant="Variant.Outlined"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Class="mt-0"
+                      Style="min-width:250px;" />
+        <MudTextField @bind-Value="_tagQuery"
+                      Label="Tag Filter"
+                      Immediate="true"
+                      Variant="Variant.Outlined"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Label"
+                      Class="mt-0"
+                      Style="min-width:180px;"
+                      HelperText="Filter by tag" />
+    </MudStack>
+    <MudStack Row="true" Spacing="2">
+        <MudButton Variant="Variant.Outlined" Color="Color.Default" StartIcon="@Icons.Material.Filled.Sync" OnClick="@BulkSync" Disabled="@(!_playlists.Any())">
+            Bulk Sync
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="@OpenCreateDialog">
+            Add Playlist
+        </MudButton>
+    </MudStack>
 </div>
 
 @if (_playlists.Any())
 {
     <MudGrid>
-        @foreach (var playlist in _playlists)
+        @foreach (var playlist in FilteredPlaylists())
         {
+            var busy = IsPlaylistBusy(playlist);
             <MudItem xs="12" md="6" lg="4">
                 <MudCard Class="mb-4">
                     <MudCardMedia Image="@(!string.IsNullOrEmpty(playlist.YouTubeUrl) ? $"https://img.youtube.com/vi/{GetVideoIdFromPlaylist(playlist.YouTubeUrl)}/hqdefault.jpg" : "")" Height="200" />
                     <MudCardContent>
-                        <MudText Typo="Typo.h6">@playlist.Name</MudText>
+                        <MudLink Href="@($"/playlists/{playlist.Id}")" Style="text-decoration:none;">
+                            <MudText Typo="Typo.h6" Class="cursor-pointer">@playlist.Name</MudText>
+                        </MudLink>
                         <MudText Typo="Typo.body2" Color="Color.Secondary" Class="mb-2">@playlist.Description</MudText>
+                        @if (playlist.Tags != null && playlist.Tags.Any())
+                        {
+                            <MudStack Row="true" Spacing="1" Class="mb-2">
+                                @foreach (var tag in playlist.Tags.Take(6))
+                                {
+                                    <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined" Size="Size.Small">@tag</MudChip>
+                                }
+                                @if (playlist.Tags.Count > 6)
+                                {
+                                    <MudTooltip Text="@string.Join(", ", playlist.Tags)">
+                                        <MudChip T="string" Color="Color.Secondary" Variant="Variant.Text" Size="Size.Small">+@((playlist.Tags.Count - 6))</MudChip>
+                                    </MudTooltip>
+                                }
+                            </MudStack>
+                        }
                         <div class="d-flex align-center mb-2">
                             <MudIcon Icon="@Icons.Material.Filled.MusicNote" Color="Color.Secondary" Size="Size.Small" Class="mr-1" />
-                            <MudText Typo="Typo.caption">@playlist.TotalTracks tracks</MudText>
+                            <MudText Typo="Typo.caption">@playlist.TotalTracks tracks • @playlist.DownloadedTracks downloaded</MudText>
                         </div>
                         <div class="d-flex align-center mb-2">
                             <MudIcon Icon="@Icons.Material.Filled.Schedule" Color="Color.Secondary" Size="Size.Small" Class="mr-1" />
                             <MudText Typo="Typo.caption">Last sync: @(playlist.LastSyncCompleted?.ToString("MMM dd, yyyy") ?? "Never")</MudText>
                         </div>
                         <MudChip T="string" Text="@playlist.Status.ToString()" Color="@GetStatusColor(playlist.Status)" Size="Size.Small" Variant="Variant.Text" />
+                        @if (playlist.AutoSync && playlist.CronExpressions.Any())
+                        {
+                            <div class="mt-2">
+                                <MudTooltip Text="Auto Sync Schedules">
+                                    <MudChip T="string" Color="Color.Info" Size="Size.Small" Variant="Variant.Outlined">
+                                        Auto: @string.Join(", ", playlist.CronExpressions)
+                                    </MudChip>
+                                </MudTooltip>
+                            </div>
+                        }
                     </MudCardContent>
                     <MudCardActions>
-                        <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Sync" OnClick="@(() => SyncPlaylist(playlist.Id))">
-                            Sync
-                        </MudButton>
-                        <MudButton Variant="Variant.Text" Color="Color.Default" StartIcon="@Icons.Material.Filled.Edit" OnClick="@(() => EditPlaylist(playlist))">
+                        @if (busy)
+                        {
+                            <MudButton Variant="Variant.Text" Color="Color.Error" OnClick="@(() => CancelPlaylistSync(playlist.Id))">
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                Cancel
+                            </MudButton>
+                        }
+                        else
+                        {
+                            <MudButton Variant="Variant.Text" Color="Color.Primary" OnClick="@(() => SyncPlaylist(playlist.Id))">
+                                <MudIcon Icon="@Icons.Material.Filled.Sync" Size="Size.Small" Class="mr-1" />
+                                Sync
+                            </MudButton>
+                        }
+                        <MudButton Variant="Variant.Text" Color="Color.Default" StartIcon="@Icons.Material.Filled.Edit" Disabled="busy" OnClick="@(() => EditPlaylist(playlist))">
                             Edit
                         </MudButton>
-                        <MudButton Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" OnClick="@(() => DeletePlaylist(playlist))">
+                        <MudButton Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" Disabled="busy" OnClick="@(() => DeletePlaylist(playlist))">
                             Delete
                         </MudButton>
                     </MudCardActions>
@@ -62,61 +129,104 @@ else
     </MudPaper>
 }
 
-<MudDialog @bind-Visible="@_showCreateDialog" Options="@_dialogOptions">
+<MudDialog @bind-Visible="@_showDialog" Options="@_dialogOptions">
     <TitleContent>
         <MudText Typo="Typo.h6">
-            <MudIcon Icon="@Icons.Material.Filled.PlaylistAdd" Class="mr-3" />
-            Add New Playlist
+            <MudIcon Icon="@(_isEdit ? Icons.Material.Filled.Edit : Icons.Material.Filled.PlaylistAdd)" Class="mr-3" />
+            @(_isEdit ? "Edit Playlist" : "Add New Playlist")
         </MudText>
     </TitleContent>
     <DialogContent>
         <MudForm @ref="_form" @bind-IsValid="@_formValid">
-            <MudTextField @bind-Value="@_newPlaylist.Name" 
-                          Label="Playlist Name" 
-                          Required="true" 
+            <MudTextField @bind-Value="@_working.Name"
+                          Label="Playlist Name"
+                          Required="true"
                           RequiredError="Name is required!" />
             
-            <MudTextField @bind-Value="@_newPlaylist.YouTubeUrl" 
-                          Label="YouTube Playlist URL" 
-                          Required="true" 
+            <MudTextField @bind-Value="@_working.YouTubeUrl"
+                          Label="YouTube Playlist URL or LM"
+                          Required="true"
                           RequiredError="URL is required!"
                           Class="mt-3"
-                          HelperText="Paste the full YouTube playlist URL" />
+                          HelperText="Full YouTube playlist URL containing 'list=' or 'LM' for liked songs" />
             
-            <MudTextField @bind-Value="@_newPlaylist.Description" 
-                          Label="Description" 
+            <MudTextField @bind-Value="@_working.Description"
+                          Label="Description"
                           Lines="3"
                           Class="mt-3" />
             
-            <MudSwitch @bind-Value="@_newPlaylist.SyncMode" 
-                       Label="Sync Mode" 
-                       Color="Color.Primary" 
+            <MudTextField @bind-Value="_tagsText"
+                          Label="Tags (space or comma separated)"
+                          Placeholder="chill focus coding"
+                          Class="mt-3"
+                          HelperText="Used for filtering & organization" />
+            
+            <MudSwitch @bind-Value="@_working.SyncMode"
+                       Label="Strict Sync Mode (remove missing)"
+                       Color="Color.Primary"
                        Class="mt-3" />
             
-            <MudSwitch @bind-Value="@_newPlaylist.AutoSync" 
-                       Label="Auto Sync" 
-                       Color="Color.Primary" 
-                       Class="mt-3" />
+            <MudSwitch @bind-Value="@_working.AutoSync"
+                       Label="Enable Auto Sync"
+                       Color="Color.Primary"
+                       Class="mt-3"
+                       OnChanged="@(async e => await HandleAutoSyncToggle(e.Value))" />
+            
+            @if (_working.AutoSync)
+            {
+                <MudTextField @bind-Value="@_cronText"
+                              Label="Cron Expressions (one per line)"
+                              Lines="3"
+                              Placeholder="0 3 * * *"
+                              Class="mt-3"
+                              HelperText="Standard CRON format (e.g. '0 3 * * *' for 3 AM daily)" />
+            }
+            
+            <MudNumericField @bind-Value="_working.MinDurationSeconds"
+                             Label="Min Duration (sec)"
+                             Class="mt-3" />
+            <MudNumericField @bind-Value="_working.MaxDurationSeconds"
+                             Label="Max Duration (sec)"
+                             Class="mt-3" />
         </MudForm>
     </DialogContent>
     <DialogActions>
-        <MudButton OnClick="@CloseCreateDialog">Cancel</MudButton>
-        <MudButton Color="Color.Primary" Variant="Variant.Filled" OnClick="@CreatePlaylist" Disabled="@(!_formValid)">
-            Create
+        <MudButton OnClick="@CloseDialog">Cancel</MudButton>
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   Disabled="@(!_formValid || _saving)"
+                   OnClick="@SavePlaylist">
+            @if (_saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+            }
+            @(_isEdit ? "Save" : "Create")
         </MudButton>
     </DialogActions>
 </MudDialog>
 
 @code {
     private List<Playlist> _playlists = new();
-    private bool _showCreateDialog = false;
-    private Playlist _newPlaylist = new();
+    private Timer? _refreshTimer;
+    private bool _saving = false;
+
+    // Dialog / editing state
+    private bool _showDialog = false;
+    private bool _isEdit = false;
+    private Playlist? _editingOriginal;
+    private Playlist _working = new();
+    private string _cronText = string.Empty;
+    private string _tagsText = string.Empty;
+    private string _search = string.Empty;
+    private string _tagQuery = string.Empty;
+
     private MudForm _form = new();
     private bool _formValid = false;
+    private readonly HashSet<string> _syncing = new();
 
-    private DialogOptions _dialogOptions = new() 
-    { 
-        MaxWidth = MaxWidth.Medium, 
+    private DialogOptions _dialogOptions = new()
+    {
+        MaxWidth = MaxWidth.Medium,
         FullWidth = true,
         CloseButton = true
     };
@@ -124,6 +234,15 @@ else
     protected override async Task OnInitializedAsync()
     {
         await LoadPlaylists();
+        _refreshTimer = new Timer(async _ =>
+        {
+            try
+            {
+                await LoadPlaylists();
+                await InvokeAsync(StateHasChanged);
+            }
+            catch {}
+        }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
     }
 
     private async Task LoadPlaylists()
@@ -142,70 +261,337 @@ else
 
     private void OpenCreateDialog()
     {
-        _newPlaylist = new Playlist();
-        _showCreateDialog = true;
-    }
-
-    private void CloseCreateDialog()
-    {
-        _showCreateDialog = false;
-        _newPlaylist = new();
-    }
-
-    private async Task CreatePlaylist()
-    {
-        try
+        _isEdit = false;
+        _editingOriginal = null;
+        _working = new Playlist
         {
-            // Get YouTube playlist info
-            var playlistInfo = await YouTubeService.GetPlaylistInfoAsync(_newPlaylist.YouTubeUrl);
-            if (playlistInfo == null)
-            {
-                Snackbar.Add("Invalid YouTube playlist URL", Severity.Error);
-                return;
-            }
-
-            // Update playlist with YouTube info if name is empty
-            if (string.IsNullOrEmpty(_newPlaylist.Name))
-            {
-                _newPlaylist.Name = playlistInfo.Title;
-            }
-            
-            if (string.IsNullOrEmpty(_newPlaylist.Description))
-            {
-                _newPlaylist.Description = playlistInfo.Description;
-            }
-
-            _newPlaylist.YouTubeId = playlistInfo.Id;
-            _newPlaylist.TotalTracks = playlistInfo.VideoCount;
-
-            await Database.Playlists.InsertAsync(_newPlaylist);
-            
-            Snackbar.Add($"Playlist '{_newPlaylist.Name}' added successfully", Severity.Success);
-            
-            await LoadPlaylists();
-            CloseCreateDialog();
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Failed to create playlist");
-            Snackbar.Add("Failed to create playlist", Severity.Error);
-        }
-    }
-
-    private void SyncPlaylist(ObjectId playlistId)
-    {
-        Snackbar.Add("Sync functionality will be implemented soon", Severity.Info);
+            SyncMode = true,
+            AutoSync = false,
+            MinDurationSeconds = 0,
+            MaxDurationSeconds = 7200,
+            Tags = new List<string>()
+        };
+        _cronText = "";
+        _tagsText = "";
+        _showDialog = true;
     }
 
     private void EditPlaylist(Playlist playlist)
     {
-        Snackbar.Add("Edit functionality will be implemented soon", Severity.Info);
+        if (IsPlaylistBusy(playlist))
+        {
+            Snackbar.Add("Cannot edit while syncing/downloading", Severity.Warning);
+            return;
+        }
+
+        _isEdit = true;
+        _editingOriginal = playlist;
+        // Shallow copy for editing
+        _working = new Playlist
+        {
+            Id = playlist.Id,
+            Name = playlist.Name,
+            YouTubeId = playlist.YouTubeId,
+            YouTubeUrl = playlist.YouTubeUrl,
+            Description = playlist.Description,
+            Tags = new List<string>(playlist.Tags ?? new()),
+            SyncMode = playlist.SyncMode,
+            AutoSync = playlist.AutoSync,
+            CronExpressions = new List<string>(playlist.CronExpressions),
+            MinDurationSeconds = playlist.MinDurationSeconds,
+            MaxDurationSeconds = playlist.MaxDurationSeconds,
+            Status = playlist.Status,
+            LastSyncStarted = playlist.LastSyncStarted,
+            LastSyncCompleted = playlist.LastSyncCompleted,
+            LastSyncError = playlist.LastSyncError,
+            TotalTracks = playlist.TotalTracks,
+            DownloadedTracks = playlist.DownloadedTracks,
+            TotalSizeBytes = playlist.TotalSizeBytes,
+            UserId = playlist.UserId,
+            CreatedAt = playlist.CreatedAt,
+            UpdatedAt = playlist.UpdatedAt
+        };
+        _cronText = string.Join(Environment.NewLine, _working.CronExpressions);
+        _tagsText = string.Join(" ", _working.Tags);
+        _showDialog = true;
+    }
+
+    private void CloseDialog()
+    {
+        if (_saving) return;
+        _showDialog = false;
+        _working = new Playlist();
+        _isEdit = false;
+        _editingOriginal = null;
+        _cronText = "";
+        _tagsText = "";
+    }
+
+    private async Task HandleAutoSyncToggle(bool value)
+    {
+        if (value && string.IsNullOrWhiteSpace(_cronText))
+        {
+            _cronText = "0 3 * * *";
+        }
+        if (!value)
+        {
+            _cronText = "";
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task SavePlaylist()
+    {
+        if (_saving) return;
+        _saving = true;
+
+        try
+        {
+            if (!IsValidPlaylistIdentifier(_working.YouTubeUrl))
+            {
+                Snackbar.Add("Invalid playlist URL or identifier", Severity.Error);
+                return;
+            }
+
+            bool needInfo = !_isEdit || (_editingOriginal != null && !string.Equals(_editingOriginal.YouTubeUrl, _working.YouTubeUrl, StringComparison.OrdinalIgnoreCase));
+
+            if (needInfo)
+            {
+                var info = await YouTubeService.GetPlaylistInfoAsync(_working.YouTubeUrl);
+                if (info == null)
+                {
+                    Snackbar.Add("Unable to load playlist metadata", Severity.Error);
+                    return;
+                }
+
+                _working.YouTubeId = info.Id;
+                if (string.IsNullOrWhiteSpace(_working.Name))
+                    _working.Name = info.Title;
+                if (string.IsNullOrWhiteSpace(_working.Description))
+                    _working.Description = info.Description;
+                if (!_isEdit)
+                    _working.TotalTracks = info.VideoCount;
+
+                var existingSameId = (await Database.Playlists.FindAllAsync(p => p.YouTubeId == _working.YouTubeId))
+                    .Where(p => !_isEdit || p.Id != _working.Id)
+                    .Any();
+
+                if (existingSameId)
+                {
+                    Snackbar.Add("A playlist with this YouTube ID already exists", Severity.Error);
+                    return;
+                }
+            }
+
+            _working.CronExpressions = ParseCronExpressions(_cronText);
+            if (_working.AutoSync)
+            {
+                var validation = ValidateCronExpressions(_working.CronExpressions);
+                if (!validation.Valid)
+                {
+                    Snackbar.Add($"Invalid cron: {validation.Error}", Severity.Error);
+                    return;
+                }
+                if (_working.CronExpressions.Count == 0)
+                {
+                    Snackbar.Add("Auto Sync enabled but no cron expressions supplied", Severity.Warning);
+                }
+            }
+
+            _working.Tags = ParseTags(_tagsText);
+            _working.UpdatedAt = DateTime.UtcNow;
+
+            ObjectId playlistId;
+            if (_isEdit && _editingOriginal != null)
+            {
+                _editingOriginal.Name = _working.Name;
+                _editingOriginal.YouTubeUrl = _working.YouTubeUrl;
+                _editingOriginal.YouTubeId = _working.YouTubeId;
+                _editingOriginal.Description = _working.Description;
+                _editingOriginal.Tags = _working.Tags;
+                _editingOriginal.SyncMode = _working.SyncMode;
+                _editingOriginal.AutoSync = _working.AutoSync;
+                _editingOriginal.CronExpressions = _working.CronExpressions;
+                _editingOriginal.MinDurationSeconds = _working.MinDurationSeconds;
+                _editingOriginal.MaxDurationSeconds = _working.MaxDurationSeconds;
+                _editingOriginal.UpdatedAt = DateTime.UtcNow;
+
+                await Database.Playlists.UpdateAsync(_editingOriginal);
+                playlistId = _editingOriginal.Id;
+                Snackbar.Add("Playlist updated", Severity.Success);
+            }
+            else
+            {
+                var newId = await Database.Playlists.InsertAsync(_working);
+                _working.Id = newId;
+                playlistId = newId;
+                Snackbar.Add($"Playlist '{_working.Name}' created", Severity.Success);
+            }
+
+            // Scheduling logic
+            if (_working.AutoSync)
+            {
+                await SchedulingService.UnschedulePlaylistSyncAsync(playlistId.ToString());
+                foreach (var expr in _working.CronExpressions)
+                {
+                    await SchedulingService.SchedulePlaylistSyncAsync(playlistId.ToString(), expr);
+                }
+            }
+            else
+            {
+                await SchedulingService.UnschedulePlaylistSyncAsync(playlistId.ToString());
+            }
+
+            await LoadPlaylists();
+            CloseDialog();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to save playlist");
+            Snackbar.Add("Failed to save playlist", Severity.Error);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private List<string> ParseCronExpressions(string text) =>
+        text.Split('\n', '\r')
+            .Select(l => l.Trim())
+            .Where(l => !string.IsNullOrWhiteSpace(l))
+            .Distinct()
+            .ToList();
+
+    private List<string> ParseTags(string tagText) =>
+        tagText
+            .Replace(',', ' ')
+            .Split(' ', '\n', '\r', '\t')
+            .Select(t => t.Trim().ToLowerInvariant())
+            .Where(t => t.Length > 0)
+            .Distinct()
+            .Take(20)
+            .ToList();
+
+    private (bool Valid, string? Error) ValidateCronExpressions(IEnumerable<string> expressions)
+    {
+        foreach (var expr in expressions)
+        {
+            try
+            {
+                CronExpression.Parse(expr);
+            }
+            catch (Exception ex)
+            {
+                return (false, $"{expr}: {ex.Message}");
+            }
+        }
+        return (true, null);
+    }
+
+    private bool IsValidPlaylistIdentifier(string input)
+    {
+        if (string.IsNullOrWhiteSpace(input))
+            return false;
+        if (string.Equals(input.Trim(), "LM", StringComparison.OrdinalIgnoreCase))
+            return true;
+        return input.Contains("list=", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private IEnumerable<Playlist> FilteredPlaylists()
+    {
+        IEnumerable<Playlist> query = _playlists;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var s = _search.Trim().ToLowerInvariant();
+            query = query.Where(p =>
+                p.Name.ToLower().Contains(s) ||
+                p.Description.ToLower().Contains(s) ||
+                (p.Tags != null && p.Tags.Any(t => t.Contains(s))));
+        }
+        if (!string.IsNullOrWhiteSpace(_tagQuery))
+        {
+            var tq = _tagQuery.Trim().ToLowerInvariant();
+            query = query.Where(p => p.Tags != null && p.Tags.Any(t => t.Contains(tq)));
+        }
+        return query;
+    }
+
+    private async Task BulkSync()
+    {
+        // Start syncs for all non-busy playlists (fire-and-forget)
+        var targets = _playlists.Where(p => !IsPlaylistBusy(p)).ToList();
+        foreach (var pl in targets)
+        {
+            _ = SyncPlaylist(pl.Id);
+        }
+        Snackbar.Add($"Bulk sync triggered for {targets.Count} playlist(s)", Severity.Info);
+        await Task.CompletedTask;
+    }
+
+    private async Task SyncPlaylist(ObjectId playlistId)
+    {
+        var idStr = playlistId.ToString();
+        if (_syncing.Contains(idStr))
+            return;
+
+        _syncing.Add(idStr);
+        try
+        {
+            var job = await SyncService.SyncPlaylistAsync(idStr, SyncJobType.Manual);
+            Snackbar.Add("Sync started", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to start sync for playlist {PlaylistId}", idStr);
+            Snackbar.Add("Failed to start sync", Severity.Error);
+        }
+        finally
+        {
+            await LoadPlaylists();
+            _syncing.Remove(idStr);
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task CancelPlaylistSync(ObjectId playlistId)
+    {
+        try
+        {
+            var active = await SyncService.GetActiveSyncJobAsync(playlistId.ToString());
+            if (active == null)
+            {
+                Snackbar.Add("No active sync to cancel", Severity.Info);
+                return;
+            }
+            var ok = await SyncService.CancelSyncAsync(active.Id.ToString());
+            if (ok)
+                Snackbar.Add("Sync cancellation requested", Severity.Info);
+            else
+                Snackbar.Add("Failed to cancel sync", Severity.Error);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error cancelling sync for playlist {PlaylistId}", playlistId);
+            Snackbar.Add("Error cancelling sync", Severity.Error);
+        }
+        finally
+        {
+            await LoadPlaylists();
+        }
     }
 
     private async Task DeletePlaylist(Playlist playlist)
     {
         try
         {
+            if (IsPlaylistBusy(playlist))
+            {
+                Snackbar.Add("Cannot delete while playlist is syncing/downloading", Severity.Warning);
+                return;
+            }
+
+            await SchedulingService.UnschedulePlaylistSyncAsync(playlist.Id.ToString());
             await Database.Playlists.DeleteAsync(playlist.Id);
             Snackbar.Add($"Playlist '{playlist.Name}' deleted", Severity.Success);
             await LoadPlaylists();
@@ -216,6 +602,11 @@ else
             Snackbar.Add("Failed to delete playlist", Severity.Error);
         }
     }
+
+    private bool IsPlaylistBusy(Playlist playlist) =>
+        _syncing.Contains(playlist.Id.ToString()) ||
+        playlist.Status == PlaylistStatus.Syncing ||
+        playlist.Status == PlaylistStatus.Downloading;
 
     private Color GetStatusColor(PlaylistStatus status) => status switch
     {
@@ -229,19 +620,15 @@ else
 
     private string GetVideoIdFromPlaylist(string playlistUrl)
     {
-        // Simple extraction for demo purposes
         try
         {
             var uri = new Uri(playlistUrl);
             var queryParams = uri.Query.TrimStart('?').Split('&');
-            
             foreach (var param in queryParams)
             {
                 var parts = param.Split('=');
                 if (parts.Length == 2 && parts[0] == "list")
-                {
                     return parts[1];
-                }
             }
             return "";
         }
@@ -249,5 +636,10 @@ else
         {
             return "";
         }
+    }
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
     }
 }
