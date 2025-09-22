@@ -22,26 +22,27 @@ public class DatabaseService : IDatabaseService, IDisposable
     {
         _logger = logger;
         var dataPath = configuration.GetValue<string>("DataPath");
-        
-        // Use local data directory in development
-        if (string.IsNullOrEmpty(dataPath))
+
+        if (string.IsNullOrWhiteSpace(dataPath))
         {
-            dataPath = Path.Combine(Directory.GetCurrentDirectory(), "data");
+            var baseDir = AppContext.BaseDirectory;
+            dataPath = Path.Combine(baseDir, "data");
+            _logger.LogInformation("DataPath not configured; using base directory {BaseDir}", baseDir);
         }
-        
+
         Directory.CreateDirectory(dataPath);
-        var dbPath = Path.Combine(dataPath, "ymusic.db");
-        
-        _logger.LogInformation("Initializing LiteDB at {DbPath}", dbPath);
-        
+        var dbPath = Path.GetFullPath(Path.Combine(dataPath, "ymusic.db"));
+
+        _logger.LogInformation("LiteDB path resolved to {Path}", dbPath);
+
         _database = new LiteDatabase($"Filename={dbPath};Connection=shared");
-        
-    Users = new LiteDbRepository<User>(_database);
-        Playlists = new LiteDbRepository<Playlist>(_database);
-        Tracks = new LiteDbRepository<Track>(_database);
-        SyncJobs = new LiteDbRepository<SyncJob>(_database);
-    PkceSessions = new LiteDbRepository<PkceSession>(_database);
-        
+
+        Users = new LiteDbRepository<User>(_database, _logger);
+        Playlists = new LiteDbRepository<Playlist>(_database, _logger);
+        Tracks = new LiteDbRepository<Track>(_database, _logger);
+        SyncJobs = new LiteDbRepository<SyncJob>(_database, _logger);
+        PkceSessions = new LiteDbRepository<PkceSession>(_database, _logger);
+
         Initialize();
     }
 

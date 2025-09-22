@@ -1,4 +1,6 @@
 using LiteDB;
+using Microsoft.Extensions.Logging;
+using YMusicLite.Models;
 
 namespace YMusicLite.Services;
 
@@ -20,10 +22,12 @@ public interface IRepository<T> where T : class
 public class LiteDbRepository<T> : IRepository<T> where T : class
 {
     private readonly ILiteCollection<T> _collection;
+    private readonly ILogger? _logger;
 
-    public LiteDbRepository(ILiteDatabase database)
+    public LiteDbRepository(ILiteDatabase database, ILogger? logger = null)
     {
         _collection = database.GetCollection<T>();
+        _logger = logger;
     }
 
     public Task<ObjectId> InsertAsync(T entity)
@@ -40,6 +44,20 @@ public class LiteDbRepository<T> : IRepository<T> where T : class
     public Task<bool> UpdateAsync(T entity)
     {
         var result = _collection.Update(entity);
+        if (!result && typeof(T) == typeof(PkceSession))
+        {
+            try
+            {
+                // attempt to extract id if present
+                var idProp = entity.GetType().GetProperty("Id");
+                var idVal = idProp != null ? idProp.GetValue(entity)?.ToString() : "unknown";
+                _logger?.LogWarning("PkceSession update returned false id={Id}", idVal);
+            }
+            catch
+            {
+                _logger?.LogWarning("PkceSession update returned false (id unavailable)");
+            }
+        }
         return Task.FromResult(result);
     }
 

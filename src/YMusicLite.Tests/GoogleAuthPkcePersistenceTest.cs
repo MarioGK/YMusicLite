@@ -87,9 +87,9 @@ public class GoogleAuthPkcePersistenceTest
         // Provide fake auth code causing token endpoint to return error; ensures verifier retrieval path executed
         var user = await service2.AuthorizeAsync(state, "fake_code", redirect);
         Assert.Null(user);
-        // PKCE session should have been removed after attempted use
+        // PKCE session should remain (retry safety) after failed token exchange
         var remaining = await db.PkceSessions.FindAllAsync(p => p.State == state);
-        Assert.Empty(remaining);
+        Assert.NotEmpty(remaining);
     }
 
     private class FakeHandler : System.Net.Http.HttpMessageHandler

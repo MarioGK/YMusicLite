@@ -159,12 +159,21 @@
             IsLoading = true;
             StateHasChanged();
 
-            // Get the stored user ID
-            var userId = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "tempUserId");
-            if (string.IsNullOrEmpty(userId))
+            // Determine authoritative userId:
+            // 1. Prefer State query parameter (passed back from OAuth as 'state')
+            // 2. Fallback to previously stored tempUserId in localStorage
+            // 3. If still missing, abort (cannot correlate PKCE verifier)
+            string? userId = State;
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                userId = await JSRuntime.InvokeAsync<string>("localStorage.getItem", "tempUserId");
+            }
+            if (string.IsNullOrWhiteSpace(userId))
             {
                 throw new InvalidOperationException("No user session found");
             }
+            // Persist (overwrite) authoritative userId back to localStorage to ensure consistency
+            await JSRuntime.InvokeVoidAsync("localStorage.setItem", "tempUserId", userId);
 
             var redirectUri = $"{Navigation.BaseUri}auth";
             var user = await GoogleAuthService.AuthorizeAsync(userId, Code!, redirectUri);

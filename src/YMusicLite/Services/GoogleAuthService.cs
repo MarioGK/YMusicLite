@@ -31,6 +31,7 @@ public class GoogleAuthService : IGoogleAuthService
     private readonly string _clientId;
     private const string ApplicationName = "YMusicLite";
     private readonly string[] _scopes = new[] { Google.Apis.YouTube.v3.YouTubeService.Scope.YoutubeReadonly };
+    private readonly IGoogleChannelFetcher _channelFetcher;
 
     // OAuth endpoints (centralized)
     private const string AuthEndpoint = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -41,7 +42,8 @@ public class GoogleAuthService : IGoogleAuthService
         ILogger<GoogleAuthService> logger,
         IConfiguration configuration,
         IHttpClientFactory httpClientFactory,
-        IOptions<GoogleOAuthOptions> oauthOptions)
+        IOptions<GoogleOAuthOptions> oauthOptions,
+        IGoogleChannelFetcher? channelFetcher = null)
     {
         _database = database;
         _logger = logger;
@@ -65,6 +67,8 @@ public class GoogleAuthService : IGoogleAuthService
             DataStore = new CustomDataStore(_database)
         });
 
+        _channelFetcher = channelFetcher ?? new DefaultYouTubeChannelFetcher(_logger);
+
         _logger.LogInformation("GoogleAuthService initialized (PKCE desktop) with client id length {Length}", _clientId.Length);
     }
 
@@ -72,26 +76,36 @@ public class GoogleAuthService : IGoogleAuthService
     {
         try
         {
-            // Persist PKCE code verifier
+            // Persist PKCE code verifier (create or update)
             var codeVerifier = GenerateCodeVerifier();
-            var existing = (await _database.PkceSessions.FindAllAsync(p => p.State == userId)).FirstOrDefault();
+            var state = userId;
+            var existing = (await _database.PkceSessions.FindAllAsync(p => p.State == state)).FirstOrDefault();
+            PkceSession session;
             if (existing != null)
             {
                 existing.CodeVerifier = codeVerifier;
                 existing.CreatedAt = DateTime.UtcNow;
                 existing.ExpiresAt = DateTime.UtcNow.AddMinutes(15);
-                await _database.PkceSessions.UpdateAsync(existing);
+                var updated = await _database.PkceSessions.UpdateAsync(existing);
+                if (!updated)
+                {
+                    _logger.LogWarning("PkceSession update returned false state={State}", state);
+                }
+                session = existing;
             }
             else
             {
-                await _database.PkceSessions.CreateAsync(new PkceSession
+                session = new PkceSession
                 {
-                    State = userId,
+                    State = state,
                     CodeVerifier = codeVerifier,
                     CreatedAt = DateTime.UtcNow,
                     ExpiresAt = DateTime.UtcNow.AddMinutes(15)
-                });
+                };
+                await _database.PkceSessions.CreateAsync(session);
             }
+
+            _logger.LogInformation("PKCE session {Action} state={State} expires={ExpiresAt}", existing != null ? "updated" : "created", state, session.ExpiresAt);
 
             var scope = Uri.EscapeDataString(string.Join(' ', _scopes));
             var codeChallenge = GenerateCodeChallenge(codeVerifier);
@@ -99,7 +113,7 @@ public class GoogleAuthService : IGoogleAuthService
                       $"&client_id={_clientId}" +
                       $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
                       $"&scope={scope}" +
-                      $"&state={Uri.EscapeDataString(userId)}" +
+                      $"&state={Uri.EscapeDataString(state)}" +
                       "&access_type=offline&prompt=consent&include_granted_scopes=true" +
                       $"&code_challenge={codeChallenge}&code_challenge_method=S256";
             _logger.LogInformation("Generated authorization URL for user {UserId}", userId);
@@ -116,13 +130,25 @@ public class GoogleAuthService : IGoogleAuthService
     {
         try
         {
+            // Retrieve PKCE session (retain until successful token exchange)
+            var pkceSession = (await _database.PkceSessions.FindAllAsync(p => p.State == userId)).FirstOrDefault();
+
             if (string.IsNullOrEmpty(codeVerifier))
             {
-                var session = (await _database.PkceSessions.FindAllAsync(p => p.State == userId)).FirstOrDefault();
-                if (session != null && session.ExpiresAt > DateTime.UtcNow)
+                if (pkceSession != null)
                 {
-                    codeVerifier = session.CodeVerifier;
-                    await _database.PkceSessions.DeleteAsync(session.Id);
+                    if (pkceSession.ExpiresAt > DateTime.UtcNow)
+                    {
+                        codeVerifier = pkceSession.CodeVerifier;
+                    }
+                    else
+                    {
+                        _logger.LogWarning("PKCE session expired state={State} exp={Exp}", userId, pkceSession.ExpiresAt);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("PKCE session not found state={State}", userId);
                 }
             }
 
@@ -145,8 +171,7 @@ public class GoogleAuthService : IGoogleAuthService
             var content = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
             {
-                // Log minimal error information, NOT the whole response body if it contains tokens (here it doesn't on failure)
-                _logger.LogWarning("Token exchange failed Status:{Status} BodyLength:{Len}", response.StatusCode, content.Length);
+                _logger.LogWarning("Token exchange failed state={State} status={StatusCode} will retain PKCE session for retry", userId, response.StatusCode);
                 return null;
             }
 
@@ -161,24 +186,16 @@ public class GoogleAuthService : IGoogleAuthService
             _logger.LogInformation("Token exchange succeeded for user {UserId}", userId);
 
             var credential = new UserCredential(_flow, userId, token);
-            var youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
-            {
-                HttpClientInitializer = credential,
-                ApplicationName = ApplicationName
-            });
+            var channelInfo = await _channelFetcher.GetChannelAsync(credential);
 
-            var channelsRequest = youtubeService.Channels.List("snippet");
-            channelsRequest.Mine = true;
-            var channelsResponse = await channelsRequest.ExecuteAsync();
-
-            if (channelsResponse.Items?.Count > 0)
+            if (channelInfo != null)
             {
-                var channel = channelsResponse.Items.First();
-                var channelId = channel.Id ?? userId;
+                var (channelIdRaw, title) = channelInfo.Value;
+                var channelId = string.IsNullOrEmpty(channelIdRaw) ? userId : channelIdRaw;
                 var existing = await _database.Users.FindOneAsync(u => u.GoogleId == channelId);
                 var user = existing ?? new User();
                 user.GoogleId = channelId;
-                user.DisplayName = channel.Snippet.Title ?? "Unknown";
+                user.DisplayName = string.IsNullOrWhiteSpace(title) ? "Unknown" : title;
                 user.AccessToken = token.AccessToken;
                 user.RefreshToken = token.RefreshToken ?? existing?.RefreshToken ?? string.Empty;
                 user.TokenExpiry = token.IssuedUtc.AddSeconds(token.ExpiresInSeconds ?? 3600);
@@ -195,6 +212,13 @@ public class GoogleAuthService : IGoogleAuthService
                 {
                     await _database.Users.UpdateAsync(user);
                     _logger.LogInformation("Updated user record {GoogleId}", user.GoogleId);
+                }
+
+                // Delete PKCE session only after successful user persistence
+                if (pkceSession != null)
+                {
+                    var deleted = await _database.PkceSessions.DeleteAsync(pkceSession.Id);
+                    _logger.LogInformation("PKCE session deleted state={State} deleted={Deleted}", userId, deleted);
                 }
 
                 _logger.LogInformation("User authenticated: {DisplayName}", user.DisplayName);
@@ -400,7 +424,7 @@ public class GoogleAuthService : IGoogleAuthService
     }
 }
 
-// Custom data store implementation for LiteDB
+ // Custom data store implementation for LiteDB
 public class CustomDataStore : IDataStore
 {
     private readonly IDatabaseService _database;
@@ -431,4 +455,48 @@ public class CustomDataStore : IDataStore
         await Task.CompletedTask;
     }
 }
+
+public interface IGoogleChannelFetcher
+{
+    Task<(string Id, string Title)?> GetChannelAsync(UserCredential credential);
+}
+
+public class DefaultYouTubeChannelFetcher : IGoogleChannelFetcher
+{
+    private readonly ILogger _logger;
+
+    public DefaultYouTubeChannelFetcher(ILogger logger)
+    {
+        _logger = logger;
+    }
+
+    public async Task<(string Id, string Title)?> GetChannelAsync(UserCredential credential)
+    {
+        try
+        {
+            var youtubeService = new Google.Apis.YouTube.v3.YouTubeService(new BaseClientService.Initializer
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = "YMusicLite"
+            });
+
+            var channelsRequest = youtubeService.Channels.List("snippet");
+            channelsRequest.Mine = true;
+            var channelsResponse = await channelsRequest.ExecuteAsync();
+
+            if (channelsResponse.Items?.Count > 0)
+            {
+                var channel = channelsResponse.Items.First();
+                return (channel.Id ?? string.Empty, channel.Snippet.Title ?? "Unknown");
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch channel info");
+            return null;
+        }
+    }
+}
+
 // End GoogleAuthService
