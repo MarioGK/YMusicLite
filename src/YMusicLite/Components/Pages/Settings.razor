@@ -1,5 +1,7 @@
 @page "/settings"
 
+@using System.IO
+@using System.Text.RegularExpressions
 @inject IConfigService ConfigService
 @inject ISnackbar Snackbar
 
@@ -23,7 +25,7 @@
                 
                 <MudSlider @bind-Value="@_maxParallelDownloads"
                            Min="1"
-                           Max="10"
+                           Max="64"
                            Step="1"
                            Color="Color.Primary"
                            Class="mb-3">
@@ -117,12 +119,17 @@
     {
         try
         {
+            // Persist download path in DB
             await ConfigService.SetDownloadPathAsync(_downloadPath);
-            Snackbar.Add("Download path saved", Severity.Success);
+
+            // Persist MaxParallelDownloads in DB config so it's visible to other services
+            await ConfigService.SetValueAsync("MaxParallelDownloads", _maxParallelDownloads.ToString());
+
+            Snackbar.Add("Settings saved and MaxParallelDownloads applied (DB)", Severity.Success);
         }
-        catch
+        catch (Exception ex)
         {
-            Snackbar.Add("Failed to save download path", Severity.Error);
+            Snackbar.Add($"Failed to save settings: {ex.Message}", Severity.Error);
         }
     }
 

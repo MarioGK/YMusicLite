@@ -2,6 +2,8 @@ using YoutubeExplode;
 using YoutubeExplode.Converter;
 using YoutubeExplode.Videos.Streams;
 using YMusicLite.Models;
+using Microsoft.Extensions.Primitives;
+using System.Threading;
 
 namespace YMusicLite.Services;
 
@@ -12,25 +14,136 @@ public interface IDownloadService
     Task<bool> ConvertToMp3Async(string inputPath, string outputPath, IProgress<double>? progress = null, CancellationToken cancellationToken = default);
 }
 
-public class DownloadService : IDownloadService
+public class DownloadService : IDownloadService, IDisposable
 {
     private readonly YoutubeClient _youtube;
     private readonly IDatabaseService _database;
     private readonly ILogger<DownloadService> _logger;
     private readonly IConfiguration _configuration;
     private readonly IMetricsService _metrics;
+    private readonly IConfigService _configService;
+    private readonly object _semaphoreLock = new();
 
+    // Dynamic semaphore to control global parallel downloads. Updated when config changes.
+    private SemaphoreSlim _downloadSemaphore;
+    private int _maxParallel;
+ 
     public DownloadService(
-        IDatabaseService database, 
+        IDatabaseService database,
         ILogger<DownloadService> logger,
         IConfiguration configuration,
-        IMetricsService metrics)
+        IMetricsService metrics,
+        IConfigService configService)
     {
         _youtube = new YoutubeClient();
         _database = database;
         _logger = logger;
         _configuration = configuration;
         _metrics = metrics;
+        _configService = configService;
+
+        // Initialize semaphore from IConfiguration (ensure at least 1)
+        _maxParallel = Math.Max(1, _configuration.GetValue<int>("MaxParallelDownloads", 3));
+        _downloadSemaphore = new SemaphoreSlim(_maxParallel, _maxParallel);
+
+        // Also try to initialize from DB-stored config if present (fire-and-forget)
+        Task.Run(async () =>
+        {
+            try
+            {
+                var dbVal = await _configService.GetValueAsync("MaxParallelDownloads");
+                if (!string.IsNullOrWhiteSpace(dbVal) && int.TryParse(dbVal, out var dbMax))
+                {
+                    ApplyNewMaxParallel(Math.Max(1, dbMax));
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to read MaxParallelDownloads from DB on startup");
+            }
+        });
+
+        // Subscribe to DB-based config changes (if available)
+        try
+        {
+            _configService.ConfigValueChanged += OnConfigValueChanged;
+        }
+        catch
+        {
+            // If the concrete implementation doesn't expose the event, ignore.
+        }
+
+        // React to IConfiguration reloads as a fallback so changes apply immediately
+        ChangeToken.OnChange(() => _configuration.GetReloadToken(), () =>
+        {
+            try
+            {
+                var newMax = Math.Max(1, _configuration.GetValue<int>("MaxParallelDownloads", _maxParallel));
+                if (newMax != _maxParallel)
+                {
+                    _logger.LogInformation("Updating MaxParallelDownloads from {Old} to {New} (IConfiguration)", _maxParallel, newMax);
+                    ApplyNewMaxParallel(newMax);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to update MaxParallelDownloads from IConfiguration change");
+            }
+        });
+    }
+
+    private void OnConfigValueChanged(string key, string value)
+    {
+        if (!string.Equals(key, "MaxParallelDownloads", StringComparison.OrdinalIgnoreCase))
+            return;
+        if (int.TryParse(value, out var newMax))
+        {
+            ApplyNewMaxParallel(Math.Max(1, newMax));
+        }
+    }
+
+    private void ApplyNewMaxParallel(int newMax)
+    {
+        lock (_semaphoreLock)
+        {
+            if (newMax == _maxParallel) return;
+
+            var oldSemaphore = _downloadSemaphore;
+            var oldMax = _maxParallel;
+            var currentRunning = Math.Max(0, oldMax - oldSemaphore.CurrentCount);
+
+            var newInitialCount = Math.Max(0, newMax - currentRunning);
+            var newSemaphore = new SemaphoreSlim(newInitialCount, newMax);
+
+            // Swap semaphore and update tracked max
+            _downloadSemaphore = newSemaphore;
+            _maxParallel = newMax;
+
+            _logger.LogInformation("Applied MaxParallelDownloads update: oldMax={OldMax}, running={Running}, newMax={NewMax}, newAvailable={Available}",
+                oldMax, currentRunning, newMax, newInitialCount);
+
+            try
+            {
+                oldSemaphore?.Dispose();
+            }
+            catch { }
+        }
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            if (_configService != null)
+                _configService.ConfigValueChanged -= OnConfigValueChanged;
+        }
+        catch { }
+
+        try
+        {
+            _downloadSemaphore?.Dispose();
+        }
+        catch { }
     }
 
     public async Task<bool> DownloadTrackAsync(Track track, string outputDirectory, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
@@ -172,17 +285,16 @@ public class DownloadService : IDownloadService
                 pendingTracks.Count, tracks.Count);
 
             var completedTracks = new List<Track>();
-            var maxParallel = _configuration.GetValue<int>("MaxParallelDownloads", 3);
-            
-            var semaphore = new SemaphoreSlim(maxParallel, maxParallel);
             var completedCount = 0;
             
             var tasks = pendingTracks.Select(async track =>
             {
-                await semaphore.WaitAsync(cancellationToken);
+                // Capture the semaphore instance so that a concurrent swap does not cause mismatched Wait/Release.
+                var sem = _downloadSemaphore;
+                await sem.WaitAsync(cancellationToken);
                 try
                 {
-                    var trackProgress = new Progress<double>(p => 
+                    var trackProgress = new Progress<double>(p =>
                     {
                         // Individual track progress could be reported here if needed
                     });
@@ -203,7 +315,8 @@ public class DownloadService : IDownloadService
                 }
                 finally
                 {
-                    semaphore.Release();
+                    // Release the same semaphore instance we waited on.
+                    sem.Release();
                 }
             });
             

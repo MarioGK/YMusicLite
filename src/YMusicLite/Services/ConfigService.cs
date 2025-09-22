@@ -1,5 +1,6 @@
+using System;
 using YMusicLite.Models;
-
+ 
 namespace YMusicLite.Services;
 
 public interface IConfigService
@@ -8,6 +9,9 @@ public interface IConfigService
     Task SetDownloadPathAsync(string path);
     Task<string?> GetValueAsync(string key);
     Task SetValueAsync(string key, string value);
+
+    // Event fired when a config value is changed via this service.
+    event Action<string, string>? ConfigValueChanged;
 }
 
 public class ConfigService : IConfigService
@@ -16,6 +20,9 @@ public class ConfigService : IConfigService
     private readonly IDatabaseService _database;
     private readonly IConfiguration _configuration;
     private readonly ILogger<ConfigService> _logger;
+
+    // Raised when a configuration value is changed via this service.
+    public event Action<string, string>? ConfigValueChanged;
 
     public ConfigService(IDatabaseService database, IConfiguration configuration, ILogger<ConfigService> logger)
     {
@@ -95,6 +102,16 @@ public class ConfigService : IConfigService
             cfg.Value = value;
             cfg.UpdatedAt = DateTime.UtcNow;
             await _database.AppConfigurations.UpdateAsync(cfg);
+        }
+
+        try
+        {
+            ConfigValueChanged?.Invoke(key, value);
+            _logger.LogInformation("Configuration key '{Key}' changed to '{Value}'", key, value);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error raising ConfigValueChanged for key {Key}", key);
         }
     }
 }

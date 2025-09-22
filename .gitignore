@@ -417,4 +417,4 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
-src/YMusicLite/data/ymusic.db
+src/YMusicLite/data/*

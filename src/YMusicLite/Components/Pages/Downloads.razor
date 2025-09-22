@@ -2,10 +2,131 @@
 
 <PageTitle>Downloads - YMusicLite</PageTitle>
 
-<MudText Typo="Typo.h3" Class="mb-4">Downloads</MudText>
+<div class="d-flex justify-space-between align-center mb-4">
+    <MudText Typo="Typo.h3">Downloads</MudText>
+    <MudText Typo="Typo.caption" Color="Color.Secondary">Shows active downloads and progress</MudText>
+</div>
 
-<MudPaper Class="pa-16 text-center">
-    <MudIcon Icon="@Icons.Material.Filled.Download" Size="Size.Large" Color="Color.Secondary" />
-    <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-4 mb-2">No active downloads</MudText>
-    <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mb-4">Downloads will appear here when you sync playlists</MudText>
-</MudPaper>
+@if (!_downloads.Any())
+{
+    <MudPaper Class="pa-16 text-center">
+        <MudIcon Icon="@Icons.Material.Filled.Download" Size="Size.Large" Color="Color.Secondary" />
+        <MudText Typo="Typo.h6" Color="Color.Secondary" Class="mt-4 mb-2">No active downloads</MudText>
+        <MudText Typo="Typo.body1" Color="Color.Secondary" Class="mb-4">Downloads will appear here when you sync playlists</MudText>
+    </MudPaper>
+}
+else
+{
+    <MudGrid>
+        @foreach (var t in _downloads)
+        {
+            <MudItem xs="12" md="6" lg="4">
+                <MudCard Class="mb-4">
+                    <MudGrid>
+                        <MudItem xs="4" Class="pa-0">
+                            <MudCardMedia Image="@(string.IsNullOrWhiteSpace(t.ThumbnailUrl) ? "/favicon.png" : t.ThumbnailUrl)" Height="100" />
+                        </MudItem>
+                        <MudItem xs="8" Class="pa-2">
+                            <MudText Typo="Typo.subtitle1">@t.Title</MudText>
+                            <MudText Typo="Typo.caption" Color="Color.Secondary">@t.Artist</MudText>
+                            <div class="mt-2">
+                                <MudProgressLinear Value="@(t.DownloadProgress)" Color="Color.Primary" Class="mb-1" />
+                                <div class="d-flex justify-space-between align-center">
+                                    <MudText Typo="Typo.caption">@($"{t.DownloadProgress}%")</MudText>
+                                    <MudChip T="string" Color="@GetStatusColor(t.Status)" Size="Size.Small" Variant="Variant.Text">@t.Status.ToString()</MudChip>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(t.ErrorMessage))
+                                {
+                                    <MudText Typo="Typo.caption" Color="Color.Error">@t.ErrorMessage</MudText>
+                                }
+                            </div>
+                        </MudItem>
+                    </MudGrid>
+                    <MudCardActions>
+                        @if (t.Status == TrackStatus.Downloading || t.Status == TrackStatus.Converting)
+                        {
+                            <MudButton Variant="Variant.Text" Color="Color.Default" Disabled="true">
+                                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                                In progress
+                            </MudButton>
+                        }
+                        else if (t.Status == TrackStatus.Pending)
+                        {
+                            <MudButton Variant="Variant.Text" Color="Color.Info" Disabled="true">
+                                Pending
+                            </MudButton>
+                        }
+                        else if (t.Status == TrackStatus.Completed)
+                        {
+                            <MudButton Variant="Variant.Text" Color="Color.Success" StartIcon="@Icons.Material.Filled.Check">
+                                Completed
+                            </MudButton>
+                        }
+                        else if (t.Status == TrackStatus.Error)
+                        {
+                            <MudButton Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.Error">
+                                Error
+                            </MudButton>
+                        }
+                    </MudCardActions>
+                </MudCard>
+            </MudItem>
+        }
+    </MudGrid>
+}
+
+@code {
+    [Inject] private IDatabaseService Database { get; set; } = default!;
+    [Inject] private ILogger<Downloads> Logger { get; set; } = default!;
+    [Inject] private ISnackbar Snackbar { get; set; } = default!;
+
+    private List<Track> _downloads = new();
+    private Timer? _refreshTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDownloads();
+        _refreshTimer = new Timer(async _ =>
+        {
+            try
+            {
+                await LoadDownloads();
+                await InvokeAsync(StateHasChanged);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "Failed refreshing downloads");
+            }
+        }, null, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(2));
+    }
+
+    private async Task LoadDownloads()
+    {
+        try
+        {
+            // Consider active any track not Completed or Skipped
+            var items = await Database.Tracks.FindAllAsync(t => t.Status != TrackStatus.Completed && t.Status != TrackStatus.Skipped);
+            _downloads = items.OrderByDescending(t => t.UpdatedAt).ToList();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to load downloads");
+            Snackbar.Add("Failed to load downloads", Severity.Error);
+        }
+    }
+
+    private Color GetStatusColor(TrackStatus status) => status switch
+    {
+        TrackStatus.Pending => Color.Info,
+        TrackStatus.Downloading => Color.Warning,
+        TrackStatus.Converting => Color.Warning,
+        TrackStatus.Completed => Color.Success,
+        TrackStatus.Error => Color.Error,
+        _ => Color.Default
+    };
+
+    public void Dispose()
+    {
+        _refreshTimer?.Dispose();
+    }
+}
