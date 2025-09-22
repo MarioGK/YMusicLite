@@ -23,11 +23,13 @@ public class PkceSession
 
     /// <summary>
     /// When the session was created.
+    /// Stored as UTC to avoid timezone skew when reloaded (affects expiry logic).
     /// </summary>
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; } = DateTime.Now;
 
     /// <summary>
     /// Expiration time (default 15 minutes) after which the verifier is discarded.
+    /// Stored as UTC to prevent premature expiry due to implicit Local conversions.
     /// </summary>
-    public DateTime ExpiresAt { get; set; } = DateTime.UtcNow.AddMinutes(15);
+    public DateTime ExpiresAt { get; set; } = DateTime.Now.AddMinutes(15);
 }

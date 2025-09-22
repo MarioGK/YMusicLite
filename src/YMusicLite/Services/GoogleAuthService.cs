@@ -29,6 +29,7 @@ public class GoogleAuthService : IGoogleAuthService
     private readonly GoogleAuthorizationCodeFlow _flow;
     private readonly HttpClient _httpClient;
     private readonly string _clientId;
+    private readonly string? _clientSecret; // optional (web app OAuth client)
     private const string ApplicationName = "YMusicLite";
     private readonly string[] _scopes = new[] { Google.Apis.YouTube.v3.YouTubeService.Scope.YoutubeReadonly };
     private readonly IGoogleChannelFetcher _channelFetcher;
@@ -50,10 +51,19 @@ public class GoogleAuthService : IGoogleAuthService
         _configuration = configuration;
         _httpClient = httpClientFactory.CreateClient();
         _clientId = oauthOptions.Value.ClientId?.Trim() ?? string.Empty;
-
+        _clientSecret = string.IsNullOrWhiteSpace(oauthOptions.Value.ClientSecret) ? null : oauthOptions.Value.ClientSecret.Trim();
+        
         if (string.IsNullOrWhiteSpace(_clientId))
         {
             throw new InvalidOperationException("Google OAuth client ID missing (GoogleOAuth:ClientId).");
+        }
+        if (!string.IsNullOrEmpty(_clientSecret))
+        {
+            _logger.LogInformation("GoogleAuthService configured with client secret (web app OAuth style).");
+        }
+        else
+        {
+            _logger.LogInformation("GoogleAuthService running without client secret (PKCE installed app mode).");
         }
 
         // Flow is still used to build UserCredential instances (no secret required for PKCE desktop apps)
@@ -61,7 +71,8 @@ public class GoogleAuthService : IGoogleAuthService
         {
             ClientSecrets = new ClientSecrets
             {
-                ClientId = _clientId
+                ClientId = _clientId,
+                ClientSecret = _clientSecret // may be null/empty
             },
             Scopes = _scopes,
             DataStore = new CustomDataStore(_database)
@@ -81,17 +92,39 @@ public class GoogleAuthService : IGoogleAuthService
             var state = userId;
             var existing = (await _database.PkceSessions.FindAllAsync(p => p.State == state)).FirstOrDefault();
             PkceSession session;
+            bool rotated = false;
+            bool reused = false;
+
             if (existing != null)
             {
-                existing.CodeVerifier = codeVerifier;
-                existing.CreatedAt = DateTime.UtcNow;
-                existing.ExpiresAt = DateTime.UtcNow.AddMinutes(15);
-                var updated = await _database.PkceSessions.UpdateAsync(existing);
-                if (!updated)
+                // Normalize expiry comparison
+                var existingExpiryUtc = existing.ExpiresAt.Kind == DateTimeKind.Utc
+                    ? existing.ExpiresAt
+                    : existing.ExpiresAt.ToUniversalTime();
+
+                // Reuse existing non-expired verifier to avoid creating mismatch with already issued authorization code.
+                if (existingExpiryUtc > DateTime.UtcNow.AddMinutes(1))
                 {
-                    _logger.LogWarning("PkceSession update returned false state={State}", state);
+                    codeVerifier = existing.CodeVerifier; // keep original
+                    session = existing;
+                    reused = true;
+                    _logger.LogDebug("Reusing existing PKCE session state={State} expUtc={ExpUtc}", state, existingExpiryUtc);
                 }
-                session = existing;
+                else
+                {
+                    // Expired (or very near expiry) -> rotate
+                    existing.CodeVerifier = codeVerifier;
+                    existing.CreatedAt = DateTime.UtcNow;
+                    existing.ExpiresAt = DateTime.UtcNow.AddMinutes(15);
+                    var updated = await _database.PkceSessions.UpdateAsync(existing);
+                    if (!updated)
+                    {
+                        _logger.LogWarning("PkceSession update returned false state={State}", state);
+                    }
+                    session = existing;
+                    rotated = true;
+                    _logger.LogDebug("Rotated expired PKCE session state={State} newExpUtc={ExpUtc}", state, existing.ExpiresAt);
+                }
             }
             else
             {
@@ -105,7 +138,8 @@ public class GoogleAuthService : IGoogleAuthService
                 await _database.PkceSessions.CreateAsync(session);
             }
 
-            _logger.LogInformation("PKCE session {Action} state={State} expires={ExpiresAt}", existing != null ? "updated" : "created", state, session.ExpiresAt);
+            var action = existing == null ? "created" : rotated ? "rotated" : reused ? "reused" : "updated";
+            _logger.LogInformation("PKCE session {Action} state={State} expires={ExpiresAt}", action, state, session.ExpiresAt);
 
             var scope = Uri.EscapeDataString(string.Join(' ', _scopes));
             var codeChallenge = GenerateCodeChallenge(codeVerifier);
@@ -137,13 +171,33 @@ public class GoogleAuthService : IGoogleAuthService
             {
                 if (pkceSession != null)
                 {
-                    if (pkceSession.ExpiresAt > DateTime.UtcNow)
+                    // Normalize to UTC before comparison because LiteDB may deserialize as Local time (causing premature expiry)
+                    var expiresUtc = pkceSession.ExpiresAt.Kind == DateTimeKind.Utc
+                        ? pkceSession.ExpiresAt
+                        : pkceSession.ExpiresAt.ToUniversalTime();
+
+                    var graceMinutes = 5;
+                    if (expiresUtc > DateTime.UtcNow)
                     {
                         codeVerifier = pkceSession.CodeVerifier;
+                        _logger.LogDebug("PKCE session valid state={State} expUtc={ExpUtc} nowUtc={NowUtc}", userId, expiresUtc, DateTime.UtcNow);
+                    }
+                    else if (expiresUtc > DateTime.UtcNow.AddMinutes(-graceMinutes))
+                    {
+                        codeVerifier = pkceSession.CodeVerifier;
+                        _logger.LogWarning("PKCE session expired but within {Grace}m grace period state={State} expUtc={ExpUtc} nowUtc={NowUtc} proceeding with stored verifier",
+                            graceMinutes,
+                            userId,
+                            expiresUtc,
+                            DateTime.UtcNow);
                     }
                     else
                     {
-                        _logger.LogWarning("PKCE session expired state={State} exp={Exp}", userId, pkceSession.ExpiresAt);
+                        _logger.LogWarning("PKCE session expired (beyond grace) state={State} expLocal={ExpLocal} expUtc={ExpUtc} nowUtc={NowUtc}",
+                            userId,
+                            pkceSession.ExpiresAt,
+                            expiresUtc,
+                            DateTime.UtcNow);
                     }
                 }
                 else
@@ -158,6 +212,7 @@ public class GoogleAuthService : IGoogleAuthService
                 throw new InvalidOperationException("PKCE code_verifier missing");
             }
 
+            // Build token request form
             var form = new Dictionary<string, string>
             {
                 {"client_id", _clientId},
@@ -166,12 +221,61 @@ public class GoogleAuthService : IGoogleAuthService
                 {"grant_type", "authorization_code"},
                 {"redirect_uri", redirectUri}
             };
+            if (!string.IsNullOrEmpty(_clientSecret))
+            {
+                form.Add("client_secret", _clientSecret);
+            }
+
+            // Fingerprint (non-secret) of verifier for diagnostics
+            string verifierFp = string.Empty;
+            try
+            {
+                using var sha256fp = SHA256.Create();
+                var hash = sha256fp.ComputeHash(Encoding.UTF8.GetBytes(codeVerifier));
+                verifierFp = Convert.ToHexString(hash)[..12];
+            }
+            catch { /* ignore */ }
+
+            _logger.LogDebug("Exchanging authorization code state={State} codeLen={CodeLen} verifierLen={VerifierLen} redirectUriMatch={RedirectMatch} verifierFp={VerifierFp}",
+                userId,
+                code.Length,
+                codeVerifier.Length,
+                redirectUri.Equals($"{_configuration["PublicBaseUrl"]}auth", StringComparison.OrdinalIgnoreCase),
+                verifierFp);
 
             var response = await _httpClient.PostAsync(TokenEndpoint, new FormUrlEncodedContent(form));
             var content = await response.Content.ReadAsStringAsync();
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning("Token exchange failed state={State} status={StatusCode} will retain PKCE session for retry", userId, response.StatusCode);
+                string error = string.Empty;
+                string errorDesc = string.Empty;
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(content);
+                    var root = doc.RootElement;
+                    if (root.TryGetProperty("error", out var e)) error = e.GetString() ?? "";
+                    if (root.TryGetProperty("error_description", out var d)) errorDesc = d.GetString() ?? "";
+                }
+                catch
+                {
+                    // ignore parse errors
+                }
+
+                _logger.LogWarning("Token exchange failed state={State} status={StatusCode} error={Error} desc={Desc} bodyLen={BodyLen} verifierFp={VerifierFp}",
+                    userId,
+                    response.StatusCode,
+                    string.IsNullOrEmpty(error) ? "<none>" : error,
+                    string.IsNullOrEmpty(errorDesc) ? "<none>" : errorDesc,
+                    content.Length,
+                    verifierFp);
+
+                if (errorDesc.Contains("client_secret is missing", StringComparison.OrdinalIgnoreCase) &&
+                    string.IsNullOrEmpty(_clientSecret))
+                {
+                    _logger.LogError("Google reports missing client_secret but none configured. If your OAuth client type is 'Web application', set GoogleOAuth:ClientSecret. For 'Desktop app' remove and recreate credentials as Installed application.");
+                }
+                
+                // Retain PKCE session for retry (e.g., transient errors or user reattempt)
                 return null;
             }
 
@@ -353,6 +457,10 @@ public class GoogleAuthService : IGoogleAuthService
             {"grant_type", "refresh_token"},
             {"refresh_token", user.RefreshToken}
         };
+        if (!string.IsNullOrEmpty(_clientSecret))
+        {
+            form.Add("client_secret", _clientSecret);
+        }
 
         var response = await _httpClient.PostAsync(TokenEndpoint, new FormUrlEncodedContent(form));
         var content = await response.Content.ReadAsStringAsync();
