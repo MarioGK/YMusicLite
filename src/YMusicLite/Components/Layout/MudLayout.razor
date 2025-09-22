@@ -13,17 +13,17 @@
         <MudText Typo="Typo.h6" Class="ml-2">YMusicLite</MudText>
         <MudSpacer />
         <MudTooltip Text="Aggregate download speed">
-            <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined" Class="mr-2" StartIcon="@Icons.Material.Filled.Speed">
+            <MudChip T="string" Color="Color.Primary" Variant="Variant.Outlined" Class="mr-2" Icon="@Icons.Material.Filled.Speed">
                 @FormatSpeed(_snapshot.AggregateDownloadSpeedBytesPerSec)
             </MudChip>
         </MudTooltip>
         <MudTooltip Text="Active downloads">
-            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined" Class="mr-2" StartIcon="@Icons.Material.Filled.Download">
+            <MudChip T="string" Color="Color.Secondary" Variant="Variant.Outlined" Class="mr-2" Icon="@Icons.Material.Filled.Download">
                 @_snapshot.ActiveDownloads.ToString()
             </MudChip>
         </MudTooltip>
         <MudTooltip Text="Sync status">
-            <MudChip T="string" Color="@(_snapshot.ActiveSyncPlaylistId != null ? Color.Info : Color.Default)" Variant="Variant.Outlined" Class="mr-2" StartIcon="@Icons.Material.Filled.Sync">
+            <MudChip T="string" Color="@(_snapshot.ActiveSyncPlaylistId != null ? Color.Info : Color.Default)" Variant="Variant.Outlined" Class="mr-2" Icon="@Icons.Material.Filled.Sync">
                 @((_snapshot.ActiveSyncPlaylistId != null) ? $"{_snapshot.ActiveSyncPercent:F0}%" : "Idle")
             </MudChip>
         </MudTooltip>

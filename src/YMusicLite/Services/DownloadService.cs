@@ -221,14 +221,14 @@ public class DownloadService : IDownloadService
         }
     }
 
-    public async Task<bool> ConvertToMp3Async(string inputPath, string outputPath, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
+    public Task<bool> ConvertToMp3Async(string inputPath, string outputPath, IProgress<double>? progress = null, CancellationToken cancellationToken = default)
     {
         try
         {
             if (!File.Exists(inputPath))
             {
                 _logger.LogError("Input file does not exist: {InputPath}", inputPath);
-                return false;
+                return Task.FromResult(false);
             }
 
             _logger.LogInformation("Converting file to MP3: {InputPath} -> {OutputPath}", inputPath, outputPath);
@@ -240,26 +240,23 @@ public class DownloadService : IDownloadService
                 Directory.CreateDirectory(outputDir);
             }
 
-            // For now, since YoutubeExplode.Converter handles this internally during download,
-            // this method is primarily for standalone conversion needs
-            
             // If input is already MP3, just copy
             if (Path.GetExtension(inputPath).Equals(".mp3", StringComparison.OrdinalIgnoreCase))
             {
                 File.Copy(inputPath, outputPath, overwrite: true);
                 progress?.Report(1.0);
-                return true;
+                return Task.FromResult(true);
             }
 
             // For other formats, we would need additional conversion logic
             // This is a placeholder for more complex conversion scenarios
             _logger.LogWarning("Direct conversion not implemented for non-MP3 files. File: {InputPath}", inputPath);
-            return false;
+            return Task.FromResult(false);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to convert file: {InputPath}", inputPath);
-            return false;
+            return Task.FromResult(false);
         }
     }
 

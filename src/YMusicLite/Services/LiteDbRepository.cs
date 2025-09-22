@@ -83,7 +83,7 @@ public class LiteDbRepository<T> : IRepository<T> where T : class
     public Task<T?> GetByIdAsync(ObjectId id)
     {
         var entity = _collection.FindById(id);
-        return Task.FromResult(entity);
+        return Task.FromResult<T?>(entity);
     }
 
     public Task<T?> GetByIdAsync(string id)
@@ -120,6 +120,6 @@ public class LiteDbRepository<T> : IRepository<T> where T : class
     Task<T?> IRepository<T>.FindOneAsync(System.Linq.Expressions.Expression<System.Func<T, bool>> predicate)
     {
         var entity = _collection.FindOne(predicate);
-        return Task.FromResult(entity);
+        return Task.FromResult<T?>(entity);
     }
 }

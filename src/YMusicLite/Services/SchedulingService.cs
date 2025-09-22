@@ -261,7 +261,7 @@ public class SchedulingService : BackgroundService, ISchedulingService
         }
     }
 
-    private async Task ScheduleJobAsync(string playlistId, CronExpression cronExpression)
+    private Task ScheduleJobAsync(string playlistId, CronExpression cronExpression)
     {
         var utcNow = DateTime.UtcNow;
         var nextRun = cronExpression.GetNextOccurrence(utcNow);
@@ -269,7 +269,7 @@ public class SchedulingService : BackgroundService, ISchedulingService
         if (!nextRun.HasValue)
         {
             _logger.LogWarning("No next occurrence found for cron expression: {CronExpression}", cronExpression.ToString());
-            return;
+            return Task.CompletedTask;
         }
 
         var delay = nextRun.Value - utcNow;
@@ -290,27 +290,32 @@ public class SchedulingService : BackgroundService, ISchedulingService
             }
 
             // Create new timer
-            var timer = new Timer(async _ =>
+            var timer = new Timer(_ =>
             {
-                try
+                // Run on threadpool to avoid blocking the timer thread
+                _ = Task.Run(async () =>
                 {
-                    _logger.LogInformation("Executing scheduled sync for playlist: {PlaylistId}", playlistId);
-                    
-                    using var scope = _serviceProvider.CreateScope();
-                    var syncService = scope.ServiceProvider.GetRequiredService<ISyncService>();
-                    await syncService.SyncPlaylistAsync(playlistId, SyncJobType.Scheduled);
-                    
-                    // Reschedule for next occurrence
-                    await ScheduleJobAsync(playlistId, cronExpression);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Error executing scheduled sync for playlist: {PlaylistId}", playlistId);
-                }
+                    try
+                    {
+                        _logger.LogInformation("Executing scheduled sync for playlist: {PlaylistId}", playlistId);
+
+                        using var scope = _serviceProvider.CreateScope();
+                        var syncService = scope.ServiceProvider.GetRequiredService<ISyncService>();
+                        await syncService.SyncPlaylistAsync(playlistId, SyncJobType.Scheduled);
+
+                        // Reschedule for next occurrence
+                        await ScheduleJobAsync(playlistId, cronExpression);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Error executing scheduled sync for playlist: {PlaylistId}", playlistId);
+                    }
+                });
             }, null, delay, Timeout.InfiniteTimeSpan);
 
             _scheduledJobs[playlistId] = (cronExpression, timer);
         }
+        return Task.CompletedTask;
     }
 
     public override void Dispose()
