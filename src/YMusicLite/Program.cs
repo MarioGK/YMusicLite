@@ -44,6 +44,7 @@ builder.Services.AddMudServices();
 
 // Add application services
 builder.Services.AddSingleton<IDatabaseService, DatabaseService>();
+builder.Services.AddSingleton<IConfigService, ConfigService>();
 builder.Services.AddScoped<IYouTubeService, YouTubeService>();
 builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
 builder.Services.AddScoped<IDownloadService, DownloadService>();

@@ -1,5 +1,8 @@
 @page "/settings"
 
+@inject IConfigService ConfigService
+@inject ISnackbar Snackbar
+
 <PageTitle>Settings - YMusicLite</PageTitle>
 
 <MudText Typo="Typo.h3" Class="mb-4">Settings</MudText>
@@ -13,15 +16,14 @@
                 </CardHeaderContent>
             </MudCardHeader>
             <MudCardContent>
-                <MudTextField Label="Download Path" 
-                              Value="@_downloadPath" 
-                              Disabled="true" 
-                              HelperText="Path where music files will be downloaded" 
+                <MudTextField Label="Download Path"
+                              @bind-Value="@_downloadPath"
+                              HelperText="Path where music files will be downloaded"
                               Class="mb-3" />
                 
-                <MudSlider @bind-Value="@_maxParallelDownloads" 
-                           Min="1" 
-                           Max="10" 
+                <MudSlider @bind-Value="@_maxParallelDownloads"
+                           Min="1"
+                           Max="10"
                            Step="1"
                            Color="Color.Primary"
                            Class="mb-3">
@@ -32,7 +34,7 @@
             </MudCardContent>
         </MudCard>
     </MudItem>
-
+ 
     <MudItem xs="12" md="6">
         <MudCard>
             <MudCardHeader>
@@ -47,21 +49,21 @@
                     <MudSelectItem Value="@("Low")">Low Quality</MudSelectItem>
                 </MudSelect>
                 
-                <MudTextField Label="Min Duration (seconds)" 
-                              @bind-Value="@_minDuration" 
+                <MudTextField Label="Min Duration (seconds)"
+                              @bind-Value="@_minDuration"
                               InputType="InputType.Number"
                               Class="mt-3"
                               HelperText="Skip tracks shorter than this duration" />
                               
-                <MudTextField Label="Max Duration (seconds)" 
-                              @bind-Value="@_maxDuration" 
+                <MudTextField Label="Max Duration (seconds)"
+                              @bind-Value="@_maxDuration"
                               InputType="InputType.Number"
                               Class="mt-3"
                               HelperText="Skip tracks longer than this duration" />
             </MudCardContent>
         </MudCard>
     </MudItem>
-
+ 
     <MudItem xs="12">
         <MudCard>
             <MudCardHeader>
@@ -87,10 +89,10 @@
                 </div>
             </MudCardContent>
             <MudCardActions>
-                <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save">
+                <MudButton Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" OnClick="SaveSettings">
                     Save Settings
                 </MudButton>
-                <MudButton Variant="Variant.Text" Color="Color.Default">
+                <MudButton Variant="Variant.Text" Color="Color.Default" OnClick="ResetDefaults">
                     Reset to Defaults
                 </MudButton>
             </MudCardActions>
@@ -105,4 +107,27 @@
     private int _minDuration = 30;
     private int _maxDuration = 7200;
     private string _downloadPath = "data/downloads";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _downloadPath = await ConfigService.GetDownloadPathAsync();
+    }
+
+    private async Task SaveSettings()
+    {
+        try
+        {
+            await ConfigService.SetDownloadPathAsync(_downloadPath);
+            Snackbar.Add("Download path saved", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add("Failed to save download path", Severity.Error);
+        }
+    }
+
+    private void ResetDefaults()
+    {
+        _downloadPath = "data/downloads";
+    }
 }

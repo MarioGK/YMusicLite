@@ -4,7 +4,7 @@
 @inject IDatabaseService Database
 @inject ISyncService SyncService
 @inject IDownloadService DownloadService
-@inject IConfiguration Configuration
+@inject IConfigService ConfigService
 @inject ISnackbar Snackbar
 @inject ILogger<PlaylistDetails> Logger
 
@@ -285,7 +285,7 @@ else
         _retrying = true;
         try
         {
-            var basePath = GetDownloadPath(_playlist.Name);
+            var basePath = await GetDownloadPathAsync(_playlist.Name);
             var candidates = _tracks.Where(t =>
                 t.Status == TrackStatus.Error || t.Status == TrackStatus.Pending).ToList();
 
@@ -324,7 +324,7 @@ else
         _retrying = true;
         try
         {
-            var basePath = GetDownloadPath(_playlist.Name);
+            var basePath = await GetDownloadPathAsync(_playlist.Name);
             var ok = await DownloadService.DownloadTrackAsync(track, basePath, null);
             Snackbar.Add(ok ? "Track downloaded" : "Track retry failed", ok ? Severity.Success : Severity.Error);
         }
@@ -341,9 +341,9 @@ else
         }
     }
 
-    private string GetDownloadPath(string playlistName)
+    private async Task<string> GetDownloadPathAsync(string playlistName)
     {
-        var basePath = Configuration.GetValue<string>("DownloadPath", "/app/data/downloads");
+        var basePath = await ConfigService.GetDownloadPathAsync();
         var safe = GetSafeFileName(playlistName);
         var path = Path.Combine(basePath, safe);
         Directory.CreateDirectory(path);

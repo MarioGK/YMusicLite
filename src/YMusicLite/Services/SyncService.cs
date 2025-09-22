@@ -17,16 +17,18 @@ public class SyncService : ISyncService
     private readonly IDownloadService _downloadService;
     private readonly ILogger<SyncService> _logger;
     private readonly IConfiguration _configuration;
+    private readonly IConfigService _configService;
     private readonly Dictionary<string, CancellationTokenSource> _activeSyncs = new();
     private readonly object _lock = new object();
     private readonly IMetricsService _metrics;
-
+ 
     public SyncService(
         IDatabaseService database,
         IYouTubeService youtubeService,
         IDownloadService downloadService,
         ILogger<SyncService> logger,
         IConfiguration configuration,
+        IConfigService configService,
         IMetricsService metrics)
     {
         _database = database;
@@ -34,6 +36,7 @@ public class SyncService : ISyncService
         _downloadService = downloadService;
         _logger = logger;
         _configuration = configuration;
+        _configService = configService;
         _metrics = metrics;
     }
 
@@ -287,7 +290,7 @@ public class SyncService : ISyncService
             playlist.UpdatedAt = DateTime.UtcNow;
             await _database.Playlists.UpdateAsync(playlist);
 
-            var downloadPath = GetDownloadPath(playlist);
+            var downloadPath = await GetDownloadPathAsync(playlist);
             var allTracks = await _database.Tracks.FindAllAsync(t => t.PlaylistId == playlist.Id.ToString());
             var tracksToDownload = allTracks.Where(t => t.Status == TrackStatus.Pending || t.Status == TrackStatus.Error).ToList();
 
@@ -383,9 +386,9 @@ public class SyncService : ISyncService
         await _database.SyncJobs.UpdateAsync(syncJob);
     }
 
-    private string GetDownloadPath(Playlist playlist)
+    private async Task<string> GetDownloadPathAsync(Playlist playlist)
     {
-        var basePath = _configuration.GetValue<string>("DownloadPath", "/app/data/downloads");
+        var basePath = await _configService.GetDownloadPathAsync();
         var playlistPath = Path.Combine(basePath, GetSafeFileName(playlist.Name));
         Directory.CreateDirectory(playlistPath);
         return playlistPath;
