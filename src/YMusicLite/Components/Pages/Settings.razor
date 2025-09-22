@@ -120,7 +120,7 @@
             await ConfigService.SetDownloadPathAsync(_downloadPath);
             Snackbar.Add("Download path saved", Severity.Success);
         }
-        catch (Exception ex)
+        catch
         {
             Snackbar.Add("Failed to save download path", Severity.Error);
         }
