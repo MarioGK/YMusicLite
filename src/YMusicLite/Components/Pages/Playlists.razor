@@ -105,10 +105,10 @@
                                 Sync
                             </MudButton>
                         }
-                        <MudButton Variant="Variant.Text" Color="Color.Default" StartIcon="@Icons.Material.Filled.Edit" Disabled="busy" OnClick="@(() => EditPlaylist(playlist))">
+                        <MudButton Variant="Variant.Text" Color="Color.Default" StartIcon="@Icons.Material.Filled.Edit" Disabled="@busy" OnClick="@(() => EditPlaylist(playlist))">
                             Edit
                         </MudButton>
-                        <MudButton Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" Disabled="busy" OnClick="@(() => DeletePlaylist(playlist))">
+                        <MudButton Variant="Variant.Text" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete" Disabled="@busy" OnClick="@(() => DeletePlaylist(playlist))">
                             Delete
                         </MudButton>
                     </MudCardActions>
@@ -166,11 +166,11 @@ else
                        Color="Color.Primary"
                        Class="mt-3" />
             
-            <MudSwitch @bind-Value="@_working.AutoSync"
+            <MudSwitch Value="@_working.AutoSync"
                        Label="Enable Auto Sync"
                        Color="Color.Primary"
                        Class="mt-3"
-                       OnChanged="@(async e => await HandleAutoSyncToggle(e.Value))" />
+                       ValueChanged="@( (bool b) => HandleAutoSyncToggle(b) )" />
             
             @if (_working.AutoSync)
             {
@@ -325,19 +325,6 @@ else
         _editingOriginal = null;
         _cronText = "";
         _tagsText = "";
-    }
-
-    private async Task HandleAutoSyncToggle(bool value)
-    {
-        if (value && string.IsNullOrWhiteSpace(_cronText))
-        {
-            _cronText = "0 3 * * *";
-        }
-        if (!value)
-        {
-            _cronText = "";
-        }
-        await Task.CompletedTask;
     }
 
     private async Task SavePlaylist()
@@ -642,4 +629,18 @@ else
     {
         _refreshTimer?.Dispose();
     }
+
+    private void HandleAutoSyncToggle(bool value)
+    {
+        _working.AutoSync = value;
+        if (value && string.IsNullOrWhiteSpace(_cronText))
+        {
+            _cronText = "0 3 * * *";
+        }
+        if (!value)
+        {
+            _cronText = "";
+        }
+    }
+
 }
